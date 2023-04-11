@@ -1,4 +1,3 @@
 mod packet;
-mod socket;
-pub mod tcp;
+pub mod socket;
 mod tcpflags;

@@ -1,6 +1,6 @@
 use anyhow::Result;
-use std::{env, io, net::Ipv4Addr, str};
-use toytcp::tcp::TCP;
+use std::{env, net::Ipv4Addr};
+use toytcp::socket::Socket;
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -11,7 +11,8 @@ fn main() -> Result<()> {
 }
 
 fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
-    let tcp = TCP::new();
-    let _ = tcp.connect(remote_addr, remote_port)?;
+    println!("{:?}:{:?}", remote_addr, remote_port);
+    let mut s = Socket::new(remote_addr, remote_port)?;
+    let _ = s.connect()?;
     Ok(())
 }
