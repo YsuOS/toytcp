@@ -2,6 +2,7 @@ use crate::packet::TCPPacket;
 use crate::tcpflags;
 use anyhow::Result;
 use pnet::packet::ip::IpNextHeaderProtocols;
+use pnet::packet::{util, Packet};
 use pnet::transport::{self, TransportChannelType, TransportProtocol, TransportSender};
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -12,8 +13,12 @@ use std::net::{IpAddr, Ipv4Addr};
 //const MSS: usize = 1460;
 //const PORT_RANGE: Range<u16> = 40000..60000;
 
-// how much data can be buffered on the socket
-//const SOCKET_BUFFER_SIZE: usize = 4380;
+// How much data can be buffered on the socket
+const SOCKET_BUFFER_SIZE: usize = 4380;
+
+// How much data can be "in flight" on the network
+// TODO: Use the same value with a socket buffer size as a temporary value
+const WINDOW_SIZE: usize = SOCKET_BUFFER_SIZE;
 
 const MAX_PACKET_SIZE: usize = 65535;
 
@@ -45,7 +50,19 @@ impl Socket {
         packet.set_src(self.sock_id.local_port);
         packet.set_dst(self.sock_id.remote_port);
         packet.set_flag(flag);
-        self.sender.send_to(packet, IpAddr::V4(self.sock_id.remote_addr));
+        packet.set_data_offset();
+        packet.set_seq();
+        packet.set_window_size(WINDOW_SIZE as u16);
+        packet.set_checksum(util::ipv4_checksum(
+            &packet.packet(),
+            8,
+            &[],
+            &self.sock_id.local_addr,
+            &self.sock_id.remote_addr,
+            IpNextHeaderProtocols::Tcp,
+        ));
+        self.sender
+            .send_to(packet, IpAddr::V4(self.sock_id.remote_addr))?;
         Ok(())
     }
 }
