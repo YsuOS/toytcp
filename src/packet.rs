@@ -2,11 +2,11 @@ use pnet::packet::Packet;
 
 const TCP_HEADER_SIZE: usize = 20;
 
-pub struct TCPPacket {
+pub struct TcpPacket {
     buffer: Vec<u8>,
 }
 
-impl TCPPacket {
+impl TcpPacket {
     pub fn new(payload_len: usize) -> Self {
         Self {
             buffer: vec![0; TCP_HEADER_SIZE + payload_len],
@@ -43,14 +43,24 @@ impl TCPPacket {
     pub fn set_checksum(&mut self, checksum: u16) {
         self.buffer[16..18].copy_from_slice(&checksum.to_be_bytes());
     }
+
+    pub fn get_flag(&self) -> u8 {
+        self.buffer[13]
+    }
 }
 
-impl Packet for TCPPacket {
+impl Packet for TcpPacket {
     fn packet(&self) -> &[u8] {
         &self.buffer
     }
 
     fn payload(&self) -> &[u8] {
         &self.buffer[TCP_HEADER_SIZE..]
+    }
+}
+
+impl From<pnet::packet::tcp::TcpPacket<'_>> for TcpPacket {
+    fn from(packet: pnet::packet::tcp::TcpPacket) -> Self {
+       Self { buffer: packet.packet().to_vec() } 
     }
 }
