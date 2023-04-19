@@ -31,6 +31,7 @@ pub struct Socket {
     sock_id: SockId,
     sender: TransportSender,
     receiver: TransportReceiver,
+    recv_params: ReceiveParams,
 }
 
 impl Socket {
@@ -44,22 +45,26 @@ impl Socket {
             sock_id,
             sender,
             receiver,
+            recv_params: ReceiveParams { next: 0 }
         })
     }
 
     pub fn connect(&mut self) -> Result<()> {
-        self.send_tcp_packet(tcpflags::SYN, &[])?;
+        let seq: u32 = 1000; // TODO: 1000 is no meanings. temporary value
+        self.send_tcp_packet(tcpflags::SYN, seq, 0, &[])?;
         self.wait_tcp_packet(tcpflags::SYN | tcpflags::ACK)?;
+        self.send_tcp_packet(tcpflags::ACK, 0, self.recv_params.next, &[])?;
         Ok(())
     }
 
-    fn send_tcp_packet(&mut self, flag: u8, payload: &[u8]) -> Result<()> {
+    fn send_tcp_packet(&mut self, flag: u8, seq: u32, ack: u32, payload: &[u8]) -> Result<()> {
         let mut packet = TcpPacket::new(payload.len());
         packet.set_src(self.sock_id.local_port);
         packet.set_dst(self.sock_id.remote_port);
         packet.set_flag(flag);
         packet.set_data_offset();
-        packet.set_seq();
+        packet.set_seq(seq);
+        packet.set_ack(ack);
         packet.set_window_size(WINDOW_SIZE as u16);
         packet.set_checksum(util::ipv4_checksum(
             &packet.packet(),
@@ -71,6 +76,7 @@ impl Socket {
         ));
         self.sender
             .send_to(packet, IpAddr::V4(self.sock_id.remote_addr))?;
+        println!("DEBUG: send {:?} !", flag);
         Ok(())
     }
 
@@ -80,6 +86,7 @@ impl Socket {
             let (packet, _) = packet_iter.next().unwrap();
             let packet = TcpPacket::from(packet);
             if packet.get_flag() == flag {
+                self.recv_params.next = packet.get_seq() + 1;
                 break;
             }
         }
@@ -104,4 +111,8 @@ impl SockId {
             remote_port,
         }
     }
+}
+
+struct ReceiveParams {
+    next: u32,
 }

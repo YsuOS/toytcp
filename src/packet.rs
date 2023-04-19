@@ -31,9 +31,12 @@ impl TcpPacket {
         self.buffer[12] |= offset << 4;
     }
 
-    pub fn set_seq(&mut self) {
-        let seq: u32 = 1000; // TODO: 1000 is no meanings. temporary value
+    pub fn set_seq(&mut self, seq: u32) {
         self.buffer[4..8].copy_from_slice(&seq.to_be_bytes());
+    }
+
+    pub fn set_ack(&mut self, ack: u32) {
+        self.buffer[8..12].copy_from_slice(&ack.to_be_bytes());
     }
 
     pub fn set_window_size(&mut self, window: u16) {
@@ -46,6 +49,15 @@ impl TcpPacket {
 
     pub fn get_flag(&self) -> u8 {
         self.buffer[13]
+    }
+
+    pub fn get_seq(&self) -> u32 {
+        u32::from_be_bytes([
+            self.buffer[4],
+            self.buffer[5],
+            self.buffer[6],
+            self.buffer[7],
+        ])
     }
 }
 
@@ -61,6 +73,8 @@ impl Packet for TcpPacket {
 
 impl From<pnet::packet::tcp::TcpPacket<'_>> for TcpPacket {
     fn from(packet: pnet::packet::tcp::TcpPacket) -> Self {
-       Self { buffer: packet.packet().to_vec() } 
+        Self {
+            buffer: packet.packet().to_vec(),
+        }
     }
 }
