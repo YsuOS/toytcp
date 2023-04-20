@@ -6,6 +6,7 @@ use pnet::packet::{util, Packet};
 use pnet::transport::{
     self, TransportChannelType, TransportProtocol, TransportReceiver, TransportSender,
 };
+use rand::random;
 use std::net::{IpAddr, Ipv4Addr};
 
 //const UNDETERMINED_IP_ADDR: std::net::Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
@@ -31,6 +32,7 @@ pub struct Socket {
     sock_id: SockId,
     sender: TransportSender,
     receiver: TransportReceiver,
+    send_params: SendParams,
     recv_params: ReceiveParams,
 }
 
@@ -45,16 +47,18 @@ impl Socket {
             sock_id,
             sender,
             receiver,
-            recv_params: ReceiveParams { next: 0 }
+            send_params: SendParams { next: 0 },
+            recv_params: ReceiveParams { next: 0 },
         })
     }
 
-    pub fn connect(&mut self) -> Result<()> {
-        let seq: u32 = 1000; // TODO: 1000 is no meanings. temporary value
-        self.send_tcp_packet(tcpflags::SYN, seq, 0, &[])?;
+    pub fn connect(&mut self) -> Result<SockId> {
+        self.send_params.next = random();
+
+        self.send_tcp_packet(tcpflags::SYN, self.send_params.next, 0, &[])?;
         self.wait_tcp_packet(tcpflags::SYN | tcpflags::ACK)?;
         self.send_tcp_packet(tcpflags::ACK, 0, self.recv_params.next, &[])?;
-        Ok(())
+        Ok(self.sock_id)
     }
 
     fn send_tcp_packet(&mut self, flag: u8, seq: u32, ack: u32, payload: &[u8]) -> Result<()> {
@@ -87,6 +91,7 @@ impl Socket {
             let packet = TcpPacket::from(packet);
             if packet.get_flag() == flag {
                 self.recv_params.next = packet.get_seq() + 1;
+                self.send_params.next = packet.get_ack();
                 break;
             }
         }
@@ -95,11 +100,12 @@ impl Socket {
     }
 }
 
-struct SockId {
-    local_addr: Ipv4Addr,
-    remote_addr: Ipv4Addr,
-    local_port: u16,
-    remote_port: u16,
+#[derive(Clone, Copy)]
+pub struct SockId {
+    pub local_addr: Ipv4Addr,
+    pub remote_addr: Ipv4Addr,
+    pub local_port: u16,
+    pub remote_port: u16,
 }
 
 impl SockId {
@@ -111,6 +117,10 @@ impl SockId {
             remote_port,
         }
     }
+}
+
+struct SendParams {
+    next: u32,
 }
 
 struct ReceiveParams {

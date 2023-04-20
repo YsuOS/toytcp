@@ -59,6 +59,15 @@ impl TcpPacket {
             self.buffer[7],
         ])
     }
+
+    pub fn get_ack(&self) -> u32 {
+        u32::from_be_bytes([
+            self.buffer[8],
+            self.buffer[9],
+            self.buffer[10],
+            self.buffer[11],
+        ])
+    }
 }
 
 impl Packet for TcpPacket {
