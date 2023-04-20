@@ -28,10 +28,24 @@ const MAX_PACKET_SIZE: usize = 65535;
 const LOCAL_ADDR: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
 const LOCAL_PORT: u16 = 33445;
 
+enum TcpStatus {
+    Closed,
+    Listen,
+    SynSent,
+    SynRcvd,
+    Established,
+    FinWait1,
+    FinWait2,
+    TimeWait,
+    CloseWait,
+    LastAck,
+}
+
 pub struct Socket {
     sock_id: SockId,
     sender: TransportSender,
     receiver: TransportReceiver,
+    status: TcpStatus,
     send_params: SendParams,
     recv_params: ReceiveParams,
 }
@@ -47,6 +61,7 @@ impl Socket {
             sock_id,
             sender,
             receiver,
+            status: TcpStatus::Closed,
             send_params: SendParams { next: 0 },
             recv_params: ReceiveParams { next: 0 },
         })
@@ -56,8 +71,10 @@ impl Socket {
         self.send_params.next = random();
 
         self.send_tcp_packet(tcpflags::SYN, self.send_params.next, 0, &[])?;
+        self.status = TcpStatus::SynSent;
         self.wait_tcp_packet(tcpflags::SYN | tcpflags::ACK)?;
         self.send_tcp_packet(tcpflags::ACK, 0, self.recv_params.next, &[])?;
+        self.status = TcpStatus::Established;
         Ok(self.sock_id)
     }
 
