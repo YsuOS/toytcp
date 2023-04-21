@@ -6,8 +6,9 @@ use pnet::packet::{util, Packet};
 use pnet::transport::{
     self, TransportChannelType, TransportProtocol, TransportReceiver, TransportSender,
 };
-use rand::random;
+use rand::{random, Rng};
 use std::net::{IpAddr, Ipv4Addr};
+use std::ops::Range;
 
 //const UNDETERMINED_IP_ADDR: std::net::Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 //const UNDETERMINED_PORT: u16 = 0;
@@ -26,7 +27,7 @@ const WINDOW_SIZE: usize = SOCKET_BUFFER_SIZE;
 const MAX_PACKET_SIZE: usize = 65535;
 
 const LOCAL_ADDR: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
-const LOCAL_PORT: u16 = 33445;
+const PORT_RANGE: Range<u16> = 40000..60000;
 
 enum TcpStatus {
     Closed,
@@ -129,10 +130,15 @@ impl SockId {
         Self {
             local_addr: LOCAL_ADDR,
             remote_addr,
-            local_port: LOCAL_PORT,
+            local_port: set_unsed_port().unwrap(),
             remote_port,
         }
     }
+}
+
+fn set_unsed_port() -> Result<u16> {
+    let mut rng = rand::thread_rng();
+    Ok(rng.gen_range(PORT_RANGE))
 }
 
 struct SendParams {
