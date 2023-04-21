@@ -67,15 +67,15 @@ impl Socket {
         })
     }
 
-    pub fn connect(&mut self) -> Result<SockId> {
+    pub fn connect(&mut self) -> Result<&SockId> {
         self.send_params.next = random();
 
         self.send_tcp_packet(tcpflags::SYN, self.send_params.next, 0, &[])?;
         self.status = TcpStatus::SynSent;
         self.wait_tcp_packet(tcpflags::SYN | tcpflags::ACK)?;
-        self.send_tcp_packet(tcpflags::ACK, 0, self.recv_params.next, &[])?;
+        self.send_tcp_packet(tcpflags::ACK, self.send_params.next, self.recv_params.next, &[])?;
         self.status = TcpStatus::Established;
-        Ok(self.sock_id)
+        Ok(&self.sock_id)
     }
 
     fn send_tcp_packet(&mut self, flag: u8, seq: u32, ack: u32, payload: &[u8]) -> Result<()> {
@@ -97,6 +97,7 @@ impl Socket {
         ));
         self.sender
             .send_to(packet, IpAddr::V4(self.sock_id.remote_addr))?;
+        self.send_params.next = seq + 1;
         println!("DEBUG: send {:?} !", flag);
         Ok(())
     }
@@ -108,7 +109,6 @@ impl Socket {
             let packet = TcpPacket::from(packet);
             if packet.get_flag() == flag {
                 self.recv_params.next = packet.get_seq() + 1;
-                self.send_params.next = packet.get_ack();
                 break;
             }
         }
@@ -117,7 +117,6 @@ impl Socket {
     }
 }
 
-#[derive(Clone, Copy)]
 pub struct SockId {
     pub local_addr: Ipv4Addr,
     pub remote_addr: Ipv4Addr,
