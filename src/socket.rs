@@ -63,16 +63,18 @@ impl Socket {
             sender,
             receiver,
             status: TcpStatus::Closed,
-            send_params: SendParams { next: 0 },
+            send_params: SendParams { next: 0, una: 0 },
             recv_params: ReceiveParams { next: 0 },
         })
     }
 
     pub fn connect(&mut self) -> Result<&SockId> {
         self.send_params.next = random();
+        self.send_params.una = self.send_params.next;
 
         self.send_tcp_packet(tcpflags::SYN, self.send_params.next, 0, &[])?;
         self.status = TcpStatus::SynSent;
+        self.send_params.next += 1;
         self.wait_tcp_packet(tcpflags::SYN | tcpflags::ACK)?;
         self.send_tcp_packet(tcpflags::ACK, self.send_params.next, self.recv_params.next, &[])?;
         self.status = TcpStatus::Established;
@@ -98,7 +100,6 @@ impl Socket {
         ));
         self.sender
             .send_to(packet, IpAddr::V4(self.sock_id.remote_addr))?;
-        self.send_params.next = seq + 1;
         println!("DEBUG: send {:?} !", flag);
         Ok(())
     }
@@ -110,6 +111,10 @@ impl Socket {
             let packet = TcpPacket::from(packet);
             if packet.get_flag() == flag {
                 self.recv_params.next = packet.get_seq() + 1;
+                self.send_params.una = packet.get_ack();
+                if self.send_params.una != self.send_params.next {
+                    println!("SND.NXT don't match SND.UNA!");
+                }
                 break;
             }
         }
@@ -143,6 +148,7 @@ fn set_unsed_port() -> Result<u16> {
 
 struct SendParams {
     next: u32,
+    una: u32,
 }
 
 struct ReceiveParams {
