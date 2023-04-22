@@ -68,6 +68,13 @@ impl TcpPacket {
             self.buffer[11],
         ])
     }
+    
+    pub fn get_window_size(&self) -> u16 {
+        u16::from_be_bytes([
+            self.buffer[14],
+            self.buffer[15],
+        ])
+    }
 }
 
 impl Packet for TcpPacket {

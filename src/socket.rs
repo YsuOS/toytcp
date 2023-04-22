@@ -21,8 +21,7 @@ use std::ops::Range;
 const SOCKET_BUFFER_SIZE: usize = 4380;
 
 // How much data can be "in flight" on the network
-// TODO: Use the same value with a socket buffer size as a temporary value
-const WINDOW_SIZE: usize = SOCKET_BUFFER_SIZE;
+const WINDOW_SIZE: u16 = SOCKET_BUFFER_SIZE as u16;
 
 const MAX_PACKET_SIZE: usize = 65535;
 
@@ -63,7 +62,7 @@ impl Socket {
             sender,
             receiver,
             status: TcpStatus::Closed,
-            send_params: SendParams { next: 0, una: 0 },
+            send_params: SendParams { next: 0, una: 0, window: WINDOW_SIZE },
             recv_params: ReceiveParams { next: 0 },
         })
     }
@@ -89,7 +88,7 @@ impl Socket {
         packet.set_data_offset();
         packet.set_seq(seq);
         packet.set_ack(ack);
-        packet.set_window_size(WINDOW_SIZE as u16);
+        packet.set_window_size(self.send_params.window);
         packet.set_checksum(util::ipv4_checksum(
             &packet.packet(),
             8,
@@ -112,6 +111,7 @@ impl Socket {
             if packet.get_flag() == flag {
                 self.recv_params.next = packet.get_seq() + 1;
                 self.send_params.una = packet.get_ack();
+                self.send_params.window = packet.get_window_size();
                 if self.send_params.una != self.send_params.next {
                     println!("SND.NXT don't match SND.UNA!");
                 }
@@ -149,6 +149,7 @@ fn set_unsed_port() -> Result<u16> {
 struct SendParams {
     next: u32,
     una: u32,
+    window: u16,
 }
 
 struct ReceiveParams {
