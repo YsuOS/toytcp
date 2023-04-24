@@ -2,10 +2,8 @@ use crate::packet::TcpPacket;
 use crate::tcpflags;
 use anyhow::Result;
 use pnet::packet::ip::IpNextHeaderProtocols;
-use pnet::packet::{util, Packet};
-use pnet::transport::{
-    self, TransportChannelType, TransportProtocol, TransportReceiver, TransportSender,
-};
+use pnet::packet::Packet;
+use pnet::transport::{self, TransportChannelType, TransportProtocol};
 use rand::{random, Rng};
 use std::net::{IpAddr, Ipv4Addr};
 use std::ops::Range;
@@ -90,14 +88,7 @@ impl Socket {
         packet.set_seq(seq);
         packet.set_ack(ack);
         packet.set_window_size(self.send_params.window);
-        packet.set_checksum(util::ipv4_checksum(
-            &packet.packet(),
-            8,
-            &[],
-            &self.sock_id.local_addr,
-            &self.sock_id.remote_addr,
-            IpNextHeaderProtocols::Tcp,
-        ));
+        packet.set_checksum(self.sock_id.local_addr, self.sock_id.remote_addr);
         let (mut sender, _) = transport::transport_channel(
             MAX_PACKET_SIZE,
             TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp)),
@@ -110,13 +101,18 @@ impl Socket {
     fn wait_tcp_packet(&mut self, flag: u8) -> Result<()> {
         let (_, mut receiver) = transport::transport_channel(
             MAX_PACKET_SIZE,
-            TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp)),
+            TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
         )?;
-        let mut packet_iter = transport::tcp_packet_iter(&mut receiver);
+        let mut packet_iter = transport::ipv4_packet_iter(&mut receiver);
         loop {
             let (packet, _) = packet_iter.next().unwrap();
-            let packet = TcpPacket::from(packet);
-            // TODO: insert is_correct_checksum(); We need to IP address from the received packet?
+            let local_addr = packet.get_destination();
+            let remote_addr = packet.get_source();
+            let packet =
+                TcpPacket::from(pnet::packet::tcp::TcpPacket::new(packet.payload()).unwrap());
+            if !packet.is_correct_checksum(local_addr, remote_addr) {
+                println!("invalid checksum");
+            }
             if packet.get_flag() == flag {
                 self.recv_params.next = packet.get_seq() + 1;
                 self.send_params.una = packet.get_ack();

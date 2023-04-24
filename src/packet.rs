@@ -1,4 +1,5 @@
-use pnet::packet::Packet;
+use std::net::Ipv4Addr;
+use pnet::packet::{ip::IpNextHeaderProtocols, util, Packet};
 
 const TCP_HEADER_SIZE: usize = 20;
 
@@ -43,7 +44,8 @@ impl TcpPacket {
         self.buffer[14..16].copy_from_slice(&window.to_be_bytes());
     }
 
-    pub fn set_checksum(&mut self, checksum: u16) {
+    pub fn set_checksum(&mut self, local_addr: Ipv4Addr, remote_addr: Ipv4Addr) {
+        let checksum = self.calc_checksum(local_addr, remote_addr);
         self.buffer[16..18].copy_from_slice(&checksum.to_be_bytes());
     }
 
@@ -68,12 +70,28 @@ impl TcpPacket {
             self.buffer[11],
         ])
     }
-    
+
     pub fn get_window_size(&self) -> u16 {
-        u16::from_be_bytes([
-            self.buffer[14],
-            self.buffer[15],
-        ])
+        u16::from_be_bytes([self.buffer[14], self.buffer[15]])
+    }
+
+    pub fn get_checksum(&self) -> u16 {
+        u16::from_be_bytes([self.buffer[16], self.buffer[17]])
+    }
+
+    pub fn is_correct_checksum(&self, local_addr: Ipv4Addr, remote_addr: Ipv4Addr) -> bool {
+        self.get_checksum() == self.calc_checksum(local_addr, remote_addr)
+    }
+
+    fn calc_checksum(&self, local_addr: Ipv4Addr, remote_addr: Ipv4Addr) -> u16 {
+        util::ipv4_checksum(
+            &self.packet(),
+            8,
+            &[],
+            &local_addr,
+            &remote_addr,
+            IpNextHeaderProtocols::Tcp,
+        )
     }
 }
 
