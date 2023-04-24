@@ -43,8 +43,6 @@ enum TcpStatus {
 
 pub struct Socket {
     sock_id: SockId,
-    sender: TransportSender,
-    receiver: TransportReceiver,
     status: TcpStatus,
     send_params: SendParams,
     recv_params: ReceiveParams,
@@ -53,16 +51,14 @@ pub struct Socket {
 impl Socket {
     pub fn new(remote_addr: Ipv4Addr, remote_port: u16) -> Result<Self> {
         let sock_id = SockId::new(remote_addr, remote_port);
-        let (sender, receiver) = transport::transport_channel(
-            MAX_PACKET_SIZE,
-            TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp)),
-        )?;
         Ok(Self {
             sock_id,
-            sender,
-            receiver,
             status: TcpStatus::Closed,
-            send_params: SendParams { next: 0, una: 0, window: WINDOW_SIZE },
+            send_params: SendParams {
+                next: 0,
+                una: 0,
+                window: WINDOW_SIZE,
+            },
             recv_params: ReceiveParams { next: 0 },
         })
     }
@@ -75,7 +71,12 @@ impl Socket {
         self.status = TcpStatus::SynSent;
         self.send_params.next += 1;
         self.wait_tcp_packet(tcpflags::SYN | tcpflags::ACK)?;
-        self.send_tcp_packet(tcpflags::ACK, self.send_params.next, self.recv_params.next, &[])?;
+        self.send_tcp_packet(
+            tcpflags::ACK,
+            self.send_params.next,
+            self.recv_params.next,
+            &[],
+        )?;
         self.status = TcpStatus::Established;
         Ok(&self.sock_id)
     }
@@ -97,17 +98,25 @@ impl Socket {
             &self.sock_id.remote_addr,
             IpNextHeaderProtocols::Tcp,
         ));
-        self.sender
-            .send_to(packet, IpAddr::V4(self.sock_id.remote_addr))?;
+        let (mut sender, _) = transport::transport_channel(
+            MAX_PACKET_SIZE,
+            TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp)),
+        )?;
+        sender.send_to(packet, IpAddr::V4(self.sock_id.remote_addr))?;
         println!("DEBUG: send {:?} !", flag);
         Ok(())
     }
 
     fn wait_tcp_packet(&mut self, flag: u8) -> Result<()> {
-        let mut packet_iter = transport::tcp_packet_iter(&mut self.receiver);
+        let (_, mut receiver) = transport::transport_channel(
+            MAX_PACKET_SIZE,
+            TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp)),
+        )?;
+        let mut packet_iter = transport::tcp_packet_iter(&mut receiver);
         loop {
             let (packet, _) = packet_iter.next().unwrap();
             let packet = TcpPacket::from(packet);
+            // TODO: insert is_correct_checksum(); We need to IP address from the received packet?
             if packet.get_flag() == flag {
                 self.recv_params.next = packet.get_seq() + 1;
                 self.send_params.una = packet.get_ack();
