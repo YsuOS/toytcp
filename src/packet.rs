@@ -49,6 +49,13 @@ impl TcpPacket {
         self.buffer[16..18].copy_from_slice(&checksum.to_be_bytes());
     }
 
+    pub fn get_src(&self) -> u16 {
+        u16::from_be_bytes([
+        self.buffer[0],
+        self.buffer[1]
+        ])
+    }
+
     pub fn get_flag(&self) -> u8 {
         self.buffer[13]
     }

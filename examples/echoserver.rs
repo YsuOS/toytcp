@@ -17,6 +17,8 @@ fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
         "listening at {:?}:{:?}",
         socket.local_addr, socket.local_port
     );
-    loop {}
+    s.accept()?;
+    println!("Accepted");
+
     Ok(())
 }

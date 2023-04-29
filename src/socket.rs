@@ -97,6 +97,21 @@ impl Socket {
         Ok(&self.sock_id)
     }
 
+    pub fn accept(&mut self) -> Result<&SockId> {
+        self.send_params.next = random();
+        self.send_params.una = self.send_params.next;
+
+        self.wait_tcp_packet2(tcpflags::SYN)?;
+        self.status = TcpStatus::SynRcvd;
+        self.send_tcp_packet(tcpflags::SYN | tcpflags::ACK, self.send_params.next, self.recv_params.next, &[])?;
+        // FIXME: accept() will never return if ACK receives before calling wait_tcp_packet()
+        // Need to receive thread.
+        self.wait_tcp_packet2(tcpflags::ACK)?;
+        self.status = TcpStatus::Established;
+
+        Ok(&self.sock_id)
+    }
+
     fn send_tcp_packet(&mut self, flag: u8, seq: u32, ack: u32, payload: &[u8]) -> Result<()> {
         let mut packet = TcpPacket::new(payload.len());
         packet.set_src(self.sock_id.local_port);
@@ -142,6 +157,39 @@ impl Socket {
             }
         }
         println!("DEBUG: receive SYN/ACK !");
+        Ok(())
+    }
+
+    fn wait_tcp_packet2(&mut self, flag: u8) -> Result<()> {
+        let (_, mut receiver) = transport::transport_channel(
+            MAX_PACKET_SIZE,
+            TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
+        )?;
+        let mut packet_iter = transport::ipv4_packet_iter(&mut receiver);
+        loop {
+            let (packet, _) = packet_iter.next().unwrap();
+            let local_addr = packet.get_destination();
+            let remote_addr = packet.get_source();
+            self.sock_id.remote_addr = remote_addr;
+
+            let packet =
+                TcpPacket::from(pnet::packet::tcp::TcpPacket::new(packet.payload()).unwrap());
+            self.sock_id.remote_port = packet.get_src();
+
+            if !packet.is_correct_checksum(local_addr, remote_addr) {
+                println!("invalid checksum");
+            }
+            if packet.get_flag() == flag {
+                self.recv_params.next = packet.get_seq() + 1;
+                //self.send_params.una = packet.get_ack();
+                //self.send_params.window = packet.get_window_size();
+                //if self.send_params.una != self.send_params.next {
+                //    println!("SND.NXT don't match SND.UNA!");
+                //}
+                break;
+            }
+        }
+        println!("DEBUG: receive SYN or ACK!");
         Ok(())
     }
 }
