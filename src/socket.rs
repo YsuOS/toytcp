@@ -8,8 +8,8 @@ use rand::{random, Rng};
 use std::net::{IpAddr, Ipv4Addr};
 use std::ops::Range;
 
-//const UNDETERMINED_IP_ADDR: std::net::Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
-//const UNDETERMINED_PORT: u16 = 0;
+const UNDETERMINED_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
+const UNDETERMINED_PORT: u16 = 0;
 //const MAX_TRANSMITTION: u8 = 5;
 //const RETRANSMITTION_TIMEOUT: u64 = 3;
 //const MSS: usize = 1460;
@@ -47,8 +47,13 @@ pub struct Socket {
 }
 
 impl Socket {
-    pub fn new(remote_addr: Ipv4Addr, remote_port: u16) -> Result<Self> {
-        let sock_id = SockId::new(remote_addr, remote_port);
+    pub fn new() -> Result<Self> {
+        let sock_id = SockId {
+            local_addr: UNDETERMINED_ADDR,
+            remote_addr: UNDETERMINED_ADDR,
+            local_port: UNDETERMINED_PORT,
+            remote_port: UNDETERMINED_PORT,
+        };
         Ok(Self {
             sock_id,
             status: TcpStatus::Closed,
@@ -61,7 +66,12 @@ impl Socket {
         })
     }
 
-    pub fn connect(&mut self) -> Result<&SockId> {
+    pub fn connect(&mut self, remote_addr: Ipv4Addr, remote_port: u16) -> Result<&SockId> {
+        self.sock_id.local_addr = LOCAL_ADDR;
+        self.sock_id.local_port = set_unsed_port().unwrap();
+        self.sock_id.remote_addr = remote_addr;
+        self.sock_id.remote_port = remote_port;
+
         self.send_params.next = random();
         self.send_params.una = self.send_params.next;
 
@@ -76,6 +86,13 @@ impl Socket {
             &[],
         )?;
         self.status = TcpStatus::Established;
+        Ok(&self.sock_id)
+    }
+
+    pub fn listen(&mut self, local_addr: Ipv4Addr, local_port: u16) -> Result<&SockId> {
+        self.sock_id.local_addr = local_addr;
+        self.sock_id.local_port = local_port;
+
         Ok(&self.sock_id)
     }
 
@@ -133,17 +150,6 @@ pub struct SockId {
     pub remote_addr: Ipv4Addr,
     pub local_port: u16,
     pub remote_port: u16,
-}
-
-impl SockId {
-    fn new(remote_addr: Ipv4Addr, remote_port: u16) -> Self {
-        Self {
-            local_addr: LOCAL_ADDR,
-            remote_addr,
-            local_port: set_unsed_port().unwrap(),
-            remote_port,
-        }
-    }
 }
 
 fn set_unsed_port() -> Result<u16> {

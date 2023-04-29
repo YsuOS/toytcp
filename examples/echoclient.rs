@@ -12,8 +12,8 @@ fn main() -> Result<()> {
 
 fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
     println!("{:?}:{:?}", remote_addr, remote_port);
-    let mut s = Socket::new(remote_addr, remote_port)?;
-    let socket = s.connect()?;
+    let mut s = Socket::new()?;
+    let socket = s.connect(remote_addr, remote_port)?;
     println!(
         "{:?}:{:?} -> {:?}:{:?}",
         socket.local_addr, socket.local_port, socket.remote_addr, socket.remote_port
