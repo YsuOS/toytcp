@@ -11,7 +11,6 @@ fn main() -> Result<()> {
 }
 
 fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
-    println!("{:?}:{:?}", local_addr, local_port);
     let mut s = Socket::new()?;
     let socket = s.listen(local_addr, local_port)?;
     println!(

@@ -92,6 +92,7 @@ impl Socket {
     pub fn listen(&mut self, local_addr: Ipv4Addr, local_port: u16) -> Result<&SockId> {
         self.sock_id.local_addr = local_addr;
         self.sock_id.local_port = local_port;
+        self.status = TcpStatus::Listen;
 
         Ok(&self.sock_id)
     }
