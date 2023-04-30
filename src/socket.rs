@@ -7,9 +7,11 @@ use pnet::transport::{self, TransportChannelType, TransportProtocol};
 use rand::{random, Rng};
 use std::net::{IpAddr, Ipv4Addr};
 use std::ops::Range;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
-const UNDETERMINED_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
-const UNDETERMINED_PORT: u16 = 0;
+//const UNDETERMINED_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
+//const UNDETERMINED_PORT: u16 = 0;
 //const MAX_TRANSMITTION: u8 = 5;
 //const RETRANSMITTION_TIMEOUT: u64 = 3;
 //const MSS: usize = 1460;
@@ -26,6 +28,7 @@ const MAX_PACKET_SIZE: usize = 65535;
 const LOCAL_ADDR: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
 const PORT_RANGE: Range<u16> = 40000..60000;
 
+#[derive(PartialEq)]
 enum TcpStatus {
     Closed,
     Listen,
@@ -40,79 +43,114 @@ enum TcpStatus {
 }
 
 pub struct Socket {
-    sock_id: SockId,
-    status: TcpStatus,
-    send_params: SendParams,
-    recv_params: ReceiveParams,
+    pub sock_id: SockId,
+    tcb: Mutex<Tcb>,
 }
 
 impl Socket {
-    pub fn new() -> Result<Self> {
+    pub fn new(
+        local_addr: Ipv4Addr,
+        local_port: u16,
+        remote_addr: Ipv4Addr,
+        remote_port: u16,
+    ) -> Arc<Self> {
         let sock_id = SockId {
-            local_addr: UNDETERMINED_ADDR,
-            remote_addr: UNDETERMINED_ADDR,
-            local_port: UNDETERMINED_PORT,
-            remote_port: UNDETERMINED_PORT,
+            local_addr,
+            remote_addr,
+            local_port,
+            remote_port,
         };
-        Ok(Self {
+        let socket = Arc::new(Self {
             sock_id,
-            status: TcpStatus::Closed,
-            send_params: SendParams {
-                next: 0,
-                una: 0,
-                window: WINDOW_SIZE,
-            },
-            recv_params: ReceiveParams { next: 0 },
-        })
+            tcb: Mutex::new(Tcb {
+                status: TcpStatus::Closed,
+                send_params: SendParams {
+                    next: 0,
+                    una: 0,
+                    window: WINDOW_SIZE,
+                },
+                recv_params: ReceiveParams { next: 0 },
+            }),
+        });
+        let cloned_socket = socket.clone();
+        thread::spawn(move || {
+            loop {
+                let tcb = cloned_socket.tcb.lock().unwrap();
+                if tcb.status == TcpStatus::SynSent {
+                    break;
+                }
+            }
+            cloned_socket.wait_tcp_packet(tcpflags::SYN | tcpflags::ACK)
+        });
+        socket
     }
 
-    pub fn connect(&mut self, remote_addr: Ipv4Addr, remote_port: u16) -> Result<&SockId> {
-        self.sock_id.local_addr = LOCAL_ADDR;
-        self.sock_id.local_port = set_unsed_port().unwrap();
-        self.sock_id.remote_addr = remote_addr;
-        self.sock_id.remote_port = remote_port;
-
-        self.send_params.next = random();
-        self.send_params.una = self.send_params.next;
-
-        self.send_tcp_packet(tcpflags::SYN, self.send_params.next, 0, &[])?;
-        self.status = TcpStatus::SynSent;
-        self.send_params.next += 1;
-        self.wait_tcp_packet(tcpflags::SYN | tcpflags::ACK)?;
-        self.send_tcp_packet(
-            tcpflags::ACK,
-            self.send_params.next,
-            self.recv_params.next,
-            &[],
-        )?;
-        self.status = TcpStatus::Established;
-        Ok(&self.sock_id)
+    pub fn connect(remote_addr: Ipv4Addr, remote_port: u16) -> Result<Arc<Socket>> {
+        let socket = Socket::new(
+            LOCAL_ADDR,
+            set_unsed_port().unwrap(),
+            remote_addr,
+            remote_port,
+        );
+        {
+            let mut tcb = socket.tcb.lock().unwrap();
+            tcb.send_params.next = random();
+            tcb.send_params.una = tcb.send_params.next;
+            socket.send_tcp_packet(
+                tcpflags::SYN,
+                tcb.send_params.next,
+                0,
+                tcb.send_params.window,
+                &[],
+            )?;
+            tcb.status = TcpStatus::SynSent;
+            tcb.send_params.next += 1;
+        }
+        loop {
+            let tcb = socket.tcb.lock().unwrap();
+            if tcb.status == TcpStatus::Established {
+                break;
+            }
+        }
+        Ok(socket)
     }
 
-    pub fn listen(&mut self, local_addr: Ipv4Addr, local_port: u16) -> Result<&SockId> {
-        self.sock_id.local_addr = local_addr;
-        self.sock_id.local_port = local_port;
-        self.status = TcpStatus::Listen;
+    //    pub fn listen(&mut self, local_addr: Ipv4Addr, local_port: u16) -> Result<&SockId> {
+    //        self.sock_id.local_addr = local_addr;
+    //        self.sock_id.local_port = local_port;
+    //        //self.status = TcpStatus::Listen;
+    //
+    //        Ok(&self.sock_id)
+    //    }
 
-        Ok(&self.sock_id)
-    }
+    //    pub fn accept(&mut self) -> Result<&SockId> {
+    //        //        self.send_params.next = random();
+    //        //        self.send_params.una = self.send_params.next;
+    //        //
+    //        //        self.wait_tcp_packet2(tcpflags::SYN)?;
+    //        //        //self.status = TcpStatus::SynRcvd;
+    //        //        self.send_tcp_packet(
+    //        //            tcpflags::SYN | tcpflags::ACK,
+    //        //            self.send_params.next,
+    //        //            self.recv_params.next,
+    //        //            &[],
+    //        //        )?;
+    //        //        // FIXME: accept() will never return if ACK receives before calling wait_tcp_packet()
+    //        //        // Need to receive thread.
+    //        //        self.wait_tcp_packet2(tcpflags::ACK)?;
+    //        //        //self.status = TcpStatus::Established;
+    //        //
+    //        Ok(&self.sock_id)
+    //    }
 
-    pub fn accept(&mut self) -> Result<&SockId> {
-        self.send_params.next = random();
-        self.send_params.una = self.send_params.next;
-
-        self.wait_tcp_packet2(tcpflags::SYN)?;
-        self.status = TcpStatus::SynRcvd;
-        self.send_tcp_packet(tcpflags::SYN | tcpflags::ACK, self.send_params.next, self.recv_params.next, &[])?;
-        // FIXME: accept() will never return if ACK receives before calling wait_tcp_packet()
-        // Need to receive thread.
-        self.wait_tcp_packet2(tcpflags::ACK)?;
-        self.status = TcpStatus::Established;
-
-        Ok(&self.sock_id)
-    }
-
-    fn send_tcp_packet(&mut self, flag: u8, seq: u32, ack: u32, payload: &[u8]) -> Result<()> {
+    fn send_tcp_packet(
+        &self,
+        flag: u8,
+        seq: u32,
+        ack: u32,
+        win: u16,
+        payload: &[u8],
+    ) -> Result<()> {
         let mut packet = TcpPacket::new(payload.len());
         packet.set_src(self.sock_id.local_port);
         packet.set_dst(self.sock_id.remote_port);
@@ -120,7 +158,7 @@ impl Socket {
         packet.set_data_offset();
         packet.set_seq(seq);
         packet.set_ack(ack);
-        packet.set_window_size(self.send_params.window);
+        packet.set_window_size(win);
         packet.set_checksum(self.sock_id.local_addr, self.sock_id.remote_addr);
         let (mut sender, _) = transport::transport_channel(
             MAX_PACKET_SIZE,
@@ -131,7 +169,7 @@ impl Socket {
         Ok(())
     }
 
-    fn wait_tcp_packet(&mut self, flag: u8) -> Result<()> {
+    fn wait_tcp_packet(&self, flag: u8) -> Result<()> {
         let (_, mut receiver) = transport::transport_channel(
             MAX_PACKET_SIZE,
             TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
@@ -147,51 +185,62 @@ impl Socket {
                 println!("invalid checksum");
             }
             if packet.get_flag() == flag {
-                self.recv_params.next = packet.get_seq() + 1;
-                self.send_params.una = packet.get_ack();
-                self.send_params.window = packet.get_window_size();
-                if self.send_params.una != self.send_params.next {
+                let mut tcb = self.tcb.lock().unwrap();
+                tcb.recv_params.next = packet.get_seq() + 1;
+                tcb.send_params.una = packet.get_ack();
+                tcb.send_params.window = packet.get_window_size();
+                if tcb.send_params.una != tcb.send_params.next {
                     println!("SND.NXT don't match SND.UNA!");
                 }
                 break;
             }
         }
         println!("DEBUG: receive SYN/ACK !");
-        Ok(())
-    }
-
-    fn wait_tcp_packet2(&mut self, flag: u8) -> Result<()> {
-        let (_, mut receiver) = transport::transport_channel(
-            MAX_PACKET_SIZE,
-            TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
+        let mut tcb = self.tcb.lock().unwrap();
+        self.send_tcp_packet(
+            tcpflags::ACK,
+            tcb.send_params.next,
+            tcb.recv_params.next,
+            tcb.send_params.window,
+            &[],
         )?;
-        let mut packet_iter = transport::ipv4_packet_iter(&mut receiver);
-        loop {
-            let (packet, _) = packet_iter.next().unwrap();
-            let local_addr = packet.get_destination();
-            let remote_addr = packet.get_source();
-            self.sock_id.remote_addr = remote_addr;
-
-            let packet =
-                TcpPacket::from(pnet::packet::tcp::TcpPacket::new(packet.payload()).unwrap());
-            self.sock_id.remote_port = packet.get_src();
-
-            if !packet.is_correct_checksum(local_addr, remote_addr) {
-                println!("invalid checksum");
-            }
-            if packet.get_flag() == flag {
-                self.recv_params.next = packet.get_seq() + 1;
-                //self.send_params.una = packet.get_ack();
-                //self.send_params.window = packet.get_window_size();
-                //if self.send_params.una != self.send_params.next {
-                //    println!("SND.NXT don't match SND.UNA!");
-                //}
-                break;
-            }
-        }
-        println!("DEBUG: receive SYN or ACK!");
+        tcb.status = TcpStatus::Established;
+        println!("DEBUG: Send ACK !");
         Ok(())
     }
+
+    //    fn wait_tcp_packet2(&mut self, flag: u8) -> Result<()> {
+    //        let (_, mut receiver) = transport::transport_channel(
+    //            MAX_PACKET_SIZE,
+    //            TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
+    //        )?;
+    //        let mut packet_iter = transport::ipv4_packet_iter(&mut receiver);
+    //        loop {
+    //            let (packet, _) = packet_iter.next().unwrap();
+    //            let local_addr = packet.get_destination();
+    //            let remote_addr = packet.get_source();
+    //            self.sock_id.remote_addr = remote_addr;
+    //
+    //            let packet =
+    //                TcpPacket::from(pnet::packet::tcp::TcpPacket::new(packet.payload()).unwrap());
+    //            self.sock_id.remote_port = packet.get_src();
+    //
+    //            if !packet.is_correct_checksum(local_addr, remote_addr) {
+    //                println!("invalid checksum");
+    //            }
+    //            if packet.get_flag() == flag {
+    //                self.recv_params.next = packet.get_seq() + 1;
+    //                //self.send_params.una = packet.get_ack();
+    //                //self.send_params.window = packet.get_window_size();
+    //                //if self.send_params.una != self.send_params.next {
+    //                //    println!("SND.NXT don't match SND.UNA!");
+    //                //}
+    //                break;
+    //            }
+    //        }
+    //        println!("DEBUG: receive SYN or ACK!");
+    //        Ok(())
+    //    }
 }
 
 pub struct SockId {
@@ -204,6 +253,12 @@ pub struct SockId {
 fn set_unsed_port() -> Result<u16> {
     let mut rng = rand::thread_rng();
     Ok(rng.gen_range(PORT_RANGE))
+}
+
+struct Tcb {
+    status: TcpStatus,
+    send_params: SendParams,
+    recv_params: ReceiveParams,
 }
 
 struct SendParams {

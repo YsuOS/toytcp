@@ -11,14 +11,14 @@ fn main() -> Result<()> {
 }
 
 fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
-    let mut s = Socket::new()?;
-    let socket = s.listen(local_addr, local_port)?;
-    println!(
-        "listening at {:?}:{:?}",
-        socket.local_addr, socket.local_port
-    );
-    s.accept()?;
-    println!("Accepted");
+//    let mut s = Socket::new()?;
+//    let socket = s.listen(local_addr, local_port)?;
+//    println!(
+//        "listening at {:?}:{:?}",
+//        socket.local_addr, socket.local_port
+//    );
+//    s.accept()?;
+//    println!("Accepted");
 
     Ok(())
 }
