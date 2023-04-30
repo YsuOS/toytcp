@@ -12,12 +12,13 @@ fn main() -> Result<()> {
 
 fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
     let socket = Socket::connect(remote_addr, remote_port)?;
+    let sock_id = socket.sock_id.read().unwrap();
     println!(
         "{:?}:{:?} -> {:?}:{:?}",
-        socket.sock_id.local_addr,
-        socket.sock_id.local_port,
-        socket.sock_id.remote_addr,
-        socket.sock_id.remote_port
+        sock_id.local_addr,
+        sock_id.local_port,
+        sock_id.remote_addr,
+        sock_id.remote_port
     );
     Ok(())
 }
