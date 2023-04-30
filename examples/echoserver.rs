@@ -21,6 +21,7 @@ fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
     }
     socket.accept()?;
     println!("Accepted");
-
+    loop {
+    }
     Ok(())
 }

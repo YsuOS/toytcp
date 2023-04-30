@@ -9,7 +9,6 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::ops::Range;
 use std::sync::{Arc, RwLock};
 use std::thread;
-use std::time::Duration;
 
 const UNDETERMINED_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 const UNDETERMINED_PORT: u16 = 0;
@@ -30,7 +29,7 @@ const LOCAL_ADDR: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
 const PORT_RANGE: Range<u16> = 40000..60000;
 
 #[derive(PartialEq)]
-enum TcpStatus {
+pub enum TcpStatus {
     Closed,
     Listen,
     SynSent,
@@ -54,6 +53,8 @@ impl Socket {
         local_port: u16,
         remote_addr: Ipv4Addr,
         remote_port: u16,
+        flag: u8,
+        status: TcpStatus,
     ) -> Arc<Self> {
         let sock_id = SockId {
             local_addr,
@@ -77,13 +78,11 @@ impl Socket {
         thread::spawn(move || {
             loop {
                 let tcb = cloned_socket.tcb.read().unwrap();
-                //if tcb.status == TcpStatus::SynSent {
-                if tcb.status == TcpStatus::Listen {
+                if tcb.status == status {
                     break;
                 }
             }
-            //cloned_socket.wait_tcp_packet(tcpflags::SYN | tcpflags::ACK)
-            cloned_socket.wait_tcp_packet2(tcpflags::SYN)
+            cloned_socket.wait_tcp_packet(flag);
         });
         socket
     }
@@ -94,6 +93,8 @@ impl Socket {
             set_unsed_port().unwrap(),
             remote_addr,
             remote_port,
+            tcpflags::SYN | tcpflags::ACK,
+            TcpStatus::SynSent,
         );
         {
             let mut tcb = socket.tcb.write().unwrap();
@@ -119,12 +120,18 @@ impl Socket {
     }
 
     pub fn listen(local_addr: Ipv4Addr, local_port: u16) -> Result<Arc<Socket>> {
-        let socket = Socket::new(local_addr, local_port, UNDETERMINED_ADDR, UNDETERMINED_PORT);
+        let socket = Socket::new(
+            local_addr,
+            local_port,
+            UNDETERMINED_ADDR,
+            UNDETERMINED_PORT,
+            tcpflags::SYN,
+            TcpStatus::Listen,
+        );
         {
             let mut tcb = socket.tcb.write().unwrap();
             tcb.status = TcpStatus::Listen;
         }
-        println!("DEBUG2");
         Ok(socket)
     }
 
@@ -183,6 +190,19 @@ impl Socket {
     }
 
     fn wait_tcp_packet(&self, flag: u8) -> Result<()> {
+        if flag == tcpflags::SYN {
+            self.syn_handler(flag)?;
+        } else if flag == tcpflags::SYN | tcpflags::ACK {
+            self.synack_handler(flag)?;
+        } else if flag == tcpflags::ACK {
+            self.ack_handler(flag)?;
+        } else {
+            todo!();
+        }
+        Ok(())
+    }
+
+    fn synack_handler(&self, flag: u8) -> Result<()> {
         let (_, mut receiver) = transport::transport_channel(
             MAX_PACKET_SIZE,
             TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
@@ -222,7 +242,7 @@ impl Socket {
         Ok(())
     }
 
-    fn wait_tcp_packet2(&self, flag: u8) -> Result<()> {
+    fn syn_handler(&self, flag: u8) -> Result<()> {
         let (_, mut receiver) = transport::transport_channel(
             MAX_PACKET_SIZE,
             TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
@@ -250,12 +270,11 @@ impl Socket {
             }
         }
         println!("DEBUG: receive SYN !");
-        self.wait_tcp_packet3(tcpflags::ACK)?;
+        self.wait_tcp_packet(tcpflags::ACK)?;
         Ok(())
     }
 
-    fn wait_tcp_packet3(&self, flag: u8) -> Result<()> {
-        println!("DEBUG");
+    fn ack_handler(&self, flag: u8) -> Result<()> {
         let (_, mut receiver) = transport::transport_channel(
             MAX_PACKET_SIZE,
             TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
@@ -271,7 +290,6 @@ impl Socket {
                 println!("invalid checksum");
             }
             if packet.get_flag() == flag {
-                println!("DEBUG2");
                 let mut tcb = self.tcb.write().unwrap();
                 tcb.send_params.una = packet.get_ack();
                 tcb.status = TcpStatus::Established;
