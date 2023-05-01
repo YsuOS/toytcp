@@ -7,7 +7,7 @@ use pnet::transport::{self, TransportChannelType, TransportProtocol};
 use rand::{random, Rng};
 use std::net::{IpAddr, Ipv4Addr};
 use std::ops::Range;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, RwLockWriteGuard};
 use std::thread;
 
 const UNDETERMINED_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
@@ -75,12 +75,12 @@ impl Socket {
         });
         let cloned_socket = socket.clone();
         thread::spawn(move || {
-            loop {
-                let tcb = cloned_socket.tcb.read().unwrap();
-                if tcb.status == status {
-                    break;
-                }
-            }
+            //            loop {
+            //                let tcb = cloned_socket.tcb.read().unwrap();
+            //                if tcb.status == status {
+            //                    break;
+            //                }
+            //            }
             cloned_socket.wait_tcp_packet();
         });
         socket
@@ -185,28 +185,28 @@ impl Socket {
             if !packet.is_correct_checksum(local_addr, remote_addr) {
                 println!("invalid checksum");
             }
-            let flag = packet.get_flag();
-            if flag == tcpflags::SYN {
-                self.syn_handler(packet, remote_addr)?;
-            } else if flag == tcpflags::SYN | tcpflags::ACK {
-                self.synack_handler(packet)?;
-            } else if flag == tcpflags::ACK {
-                self.ack_handler(packet)?;
+
+            let tcb = self.tcb.write().unwrap();
+            if tcb.status == TcpStatus::Listen {
+                self.listen_handler(packet, tcb, remote_addr)?;
+            } else if tcb.status == TcpStatus::SynSent {
+                self.synsent_handler(packet, tcb)?;
+            } else if tcb.status == TcpStatus::SynRcvd {
+                self.synrcvd_handler(packet, tcb)?;
             } else {
-                println!("Unsupported flag");
+                println!("Unsupported Status");
                 break;
             }
         }
         Ok(())
     }
 
-    fn syn_handler(&self, packet: TcpPacket, remote_addr: Ipv4Addr) -> Result<()> {
+    fn listen_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>, remote_addr: Ipv4Addr) -> Result<()> {
         {
             let mut sock_id = self.sock_id.write().unwrap();
             sock_id.remote_addr = remote_addr;
             sock_id.remote_port = packet.get_src();
         }
-        let mut tcb = self.tcb.write().unwrap();
         tcb.recv_params.next = packet.get_seq() + 1;
         tcb.send_params.next = random();
         tcb.send_params.una = tcb.send_params.next;
@@ -223,8 +223,7 @@ impl Socket {
         Ok(())
     }
 
-    fn synack_handler(&self, packet: TcpPacket) -> Result<()> {
-        let mut tcb = self.tcb.write().unwrap();
+    fn synsent_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
         tcb.recv_params.next = packet.get_seq() + 1;
         tcb.send_params.una = packet.get_ack();
         tcb.send_params.window = packet.get_window_size();
@@ -244,8 +243,7 @@ impl Socket {
         Ok(())
     }
 
-    fn ack_handler(&self, packet: TcpPacket) -> Result<()> {
-        let mut tcb = self.tcb.write().unwrap();
+    fn synrcvd_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
         tcb.send_params.una = packet.get_ack();
         tcb.status = TcpStatus::Established;
         println!("DEBUG: receive ACK !");
