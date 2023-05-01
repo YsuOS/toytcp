@@ -53,7 +53,6 @@ impl Socket {
         local_port: u16,
         remote_addr: Ipv4Addr,
         remote_port: u16,
-        flag: u8,
         status: TcpStatus,
     ) -> Arc<Self> {
         let sock_id = SockId {
@@ -82,7 +81,7 @@ impl Socket {
                     break;
                 }
             }
-            cloned_socket.wait_tcp_packet(flag);
+            cloned_socket.wait_tcp_packet();
         });
         socket
     }
@@ -93,7 +92,6 @@ impl Socket {
             set_unsed_port().unwrap(),
             remote_addr,
             remote_port,
-            tcpflags::SYN | tcpflags::ACK,
             TcpStatus::SynSent,
         );
         {
@@ -125,7 +123,6 @@ impl Socket {
             local_port,
             UNDETERMINED_ADDR,
             UNDETERMINED_PORT,
-            tcpflags::SYN,
             TcpStatus::Listen,
         );
         {
@@ -189,20 +186,7 @@ impl Socket {
         Ok(())
     }
 
-    fn wait_tcp_packet(&self, flag: u8) -> Result<()> {
-        if flag == tcpflags::SYN {
-            self.syn_handler(flag)?;
-        } else if flag == tcpflags::SYN | tcpflags::ACK {
-            self.synack_handler(flag)?;
-        } else if flag == tcpflags::ACK {
-            self.ack_handler(flag)?;
-        } else {
-            todo!();
-        }
-        Ok(())
-    }
-
-    fn synack_handler(&self, flag: u8) -> Result<()> {
+    fn wait_tcp_packet(&self) -> Result<()> {
         let (_, mut receiver) = transport::transport_channel(
             MAX_PACKET_SIZE,
             TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
@@ -217,19 +201,30 @@ impl Socket {
             if !packet.is_correct_checksum(local_addr, remote_addr) {
                 println!("invalid checksum");
             }
-            if packet.get_flag() == flag {
-                let mut tcb = self.tcb.write().unwrap();
-                tcb.recv_params.next = packet.get_seq() + 1;
-                tcb.send_params.una = packet.get_ack();
-                tcb.send_params.window = packet.get_window_size();
-                if tcb.send_params.una != tcb.send_params.next {
-                    println!("SND.NXT don't match SND.UNA!");
-                }
+            let flag = packet.get_flag();
+            if flag == tcpflags::SYN {
+                self.syn_handler(packet, remote_addr)?;
+            } else if flag == tcpflags::SYN | tcpflags::ACK {
+                self.synack_handler(packet)?;
+            } else if flag == tcpflags::ACK {
+                self.ack_handler(packet)?;
+            } else {
+                println!("Unsupported flag");
                 break;
             }
         }
-        println!("DEBUG: receive SYN/ACK !");
+        Ok(())
+    }
+
+    fn synack_handler(&self, packet: TcpPacket) -> Result<()> {
         let mut tcb = self.tcb.write().unwrap();
+        tcb.recv_params.next = packet.get_seq() + 1;
+        tcb.send_params.una = packet.get_ack();
+        tcb.send_params.window = packet.get_window_size();
+        if tcb.send_params.una != tcb.send_params.next {
+            println!("SND.NXT don't match SND.UNA!");
+        }
+        println!("DEBUG: receive SYN/ACK !");
         self.send_tcp_packet(
             tcpflags::ACK,
             tcb.send_params.next,
@@ -242,60 +237,23 @@ impl Socket {
         Ok(())
     }
 
-    fn syn_handler(&self, flag: u8) -> Result<()> {
-        let (_, mut receiver) = transport::transport_channel(
-            MAX_PACKET_SIZE,
-            TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
-        )?;
-        let mut packet_iter = transport::ipv4_packet_iter(&mut receiver);
-        loop {
-            let (packet, _) = packet_iter.next().unwrap();
-            let local_addr = packet.get_destination();
-            let remote_addr = packet.get_source();
-            let packet =
-                TcpPacket::from(pnet::packet::tcp::TcpPacket::new(packet.payload()).unwrap());
-            if !packet.is_correct_checksum(local_addr, remote_addr) {
-                println!("invalid checksum");
-            }
-            let mut sock_id = self.sock_id.write().unwrap();
-            sock_id.remote_addr = remote_addr;
-            sock_id.remote_port = packet.get_src();
-            if packet.get_flag() == flag {
-                let mut tcb = self.tcb.write().unwrap();
-                tcb.recv_params.next = packet.get_seq() + 1;
-                tcb.send_params.next = random();
-                tcb.send_params.una = tcb.send_params.next;
-                tcb.status = TcpStatus::SynRcvd;
-                break;
-            }
-        }
+    fn syn_handler(&self, packet: TcpPacket, remote_addr: Ipv4Addr) -> Result<()> {
+        let mut sock_id = self.sock_id.write().unwrap();
+        sock_id.remote_addr = remote_addr;
+        sock_id.remote_port = packet.get_src();
+        let mut tcb = self.tcb.write().unwrap();
+        tcb.recv_params.next = packet.get_seq() + 1;
+        tcb.send_params.next = random();
+        tcb.send_params.una = tcb.send_params.next;
+        tcb.status = TcpStatus::SynRcvd;
         println!("DEBUG: receive SYN !");
-        self.wait_tcp_packet(tcpflags::ACK)?;
         Ok(())
     }
 
-    fn ack_handler(&self, flag: u8) -> Result<()> {
-        let (_, mut receiver) = transport::transport_channel(
-            MAX_PACKET_SIZE,
-            TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
-        )?;
-        let mut packet_iter = transport::ipv4_packet_iter(&mut receiver);
-        loop {
-            let (packet, _) = packet_iter.next().unwrap();
-            let local_addr = packet.get_destination();
-            let remote_addr = packet.get_source();
-            let packet =
-                TcpPacket::from(pnet::packet::tcp::TcpPacket::new(packet.payload()).unwrap());
-            if !packet.is_correct_checksum(local_addr, remote_addr) {
-                println!("invalid checksum");
-            }
-            if packet.get_flag() == flag {
-                let mut tcb = self.tcb.write().unwrap();
-                tcb.send_params.una = packet.get_ack();
-                tcb.status = TcpStatus::Established;
-                break;
-            }
-        }
+    fn ack_handler(&self, packet: TcpPacket) -> Result<()> {
+        let mut tcb = self.tcb.write().unwrap();
+        tcb.send_params.una = packet.get_ack();
+        tcb.status = TcpStatus::Established;
         println!("DEBUG: receive ACK !");
         Ok(())
     }
