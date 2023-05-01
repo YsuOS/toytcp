@@ -135,23 +135,6 @@ impl Socket {
     pub fn accept(&self) -> Result<&Socket> {
         loop {
             let tcb = self.tcb.read().unwrap();
-            if tcb.status == TcpStatus::SynRcvd {
-                break;
-            }
-        }
-        {
-            let tcb = self.tcb.read().unwrap();
-            self.send_tcp_packet(
-                tcpflags::SYN | tcpflags::ACK,
-                tcb.send_params.next,
-                tcb.recv_params.next,
-                tcb.send_params.window,
-                &[],
-            )?;
-        }
-        println!("DEBUG: Send SYN/ACK !");
-        loop {
-            let tcb = self.tcb.read().unwrap();
             if tcb.status == TcpStatus::Established {
                 break;
             }
@@ -177,6 +160,7 @@ impl Socket {
         packet.set_ack(ack);
         packet.set_window_size(win);
         packet.set_checksum(sock_id.local_addr, sock_id.remote_addr);
+        println!("DEBUG");
         let (mut sender, _) = transport::transport_channel(
             MAX_PACKET_SIZE,
             TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp)),
@@ -216,6 +200,29 @@ impl Socket {
         Ok(())
     }
 
+    fn syn_handler(&self, packet: TcpPacket, remote_addr: Ipv4Addr) -> Result<()> {
+        {
+            let mut sock_id = self.sock_id.write().unwrap();
+            sock_id.remote_addr = remote_addr;
+            sock_id.remote_port = packet.get_src();
+        }
+        let mut tcb = self.tcb.write().unwrap();
+        tcb.recv_params.next = packet.get_seq() + 1;
+        tcb.send_params.next = random();
+        tcb.send_params.una = tcb.send_params.next;
+        tcb.status = TcpStatus::SynRcvd;
+        println!("DEBUG: receive SYN !");
+        self.send_tcp_packet(
+            tcpflags::SYN | tcpflags::ACK,
+            tcb.send_params.next,
+            tcb.recv_params.next,
+            tcb.send_params.window,
+            &[],
+        )?;
+        println!("DEBUG: Send SYN/ACK !");
+        Ok(())
+    }
+
     fn synack_handler(&self, packet: TcpPacket) -> Result<()> {
         let mut tcb = self.tcb.write().unwrap();
         tcb.recv_params.next = packet.get_seq() + 1;
@@ -234,19 +241,6 @@ impl Socket {
         )?;
         tcb.status = TcpStatus::Established;
         println!("DEBUG: Send ACK !");
-        Ok(())
-    }
-
-    fn syn_handler(&self, packet: TcpPacket, remote_addr: Ipv4Addr) -> Result<()> {
-        let mut sock_id = self.sock_id.write().unwrap();
-        sock_id.remote_addr = remote_addr;
-        sock_id.remote_port = packet.get_src();
-        let mut tcb = self.tcb.write().unwrap();
-        tcb.recv_params.next = packet.get_seq() + 1;
-        tcb.send_params.next = random();
-        tcb.send_params.una = tcb.send_params.next;
-        tcb.status = TcpStatus::SynRcvd;
-        println!("DEBUG: receive SYN !");
         Ok(())
     }
 
