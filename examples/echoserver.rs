@@ -12,15 +12,7 @@ fn main() -> Result<()> {
 
 fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
     let socket = Socket::listen(local_addr, local_port)?;
-    {
-        let sock_id = socket.sock_id.read().unwrap();
-        println!(
-            "listening at {:?}:{:?}",
-            sock_id.local_addr, sock_id.local_port
-        );
-    }
     socket.accept()?;
-    println!("Accepted");
     loop {
     }
     Ok(())

@@ -75,13 +75,7 @@ impl Socket {
         });
         let cloned_socket = socket.clone();
         thread::spawn(move || {
-            //            loop {
-            //                let tcb = cloned_socket.tcb.read().unwrap();
-            //                if tcb.status == status {
-            //                    break;
-            //                }
-            //            }
-            cloned_socket.wait_tcp_packet();
+            cloned_socket.wait_tcp_packet().unwrap();
         });
         socket
     }
@@ -160,13 +154,11 @@ impl Socket {
         packet.set_ack(ack);
         packet.set_window_size(win);
         packet.set_checksum(sock_id.local_addr, sock_id.remote_addr);
-        println!("DEBUG");
         let (mut sender, _) = transport::transport_channel(
             MAX_PACKET_SIZE,
             TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp)),
         )?;
         sender.send_to(packet, IpAddr::V4(sock_id.remote_addr))?;
-        println!("DEBUG: send {:?} !", flag);
         Ok(())
     }
 
@@ -183,7 +175,7 @@ impl Socket {
             let packet =
                 TcpPacket::from(pnet::packet::tcp::TcpPacket::new(packet.payload()).unwrap());
             if !packet.is_correct_checksum(local_addr, remote_addr) {
-                println!("invalid checksum");
+                dbg!("invalid checksum");
             }
 
             let tcb = self.tcb.write().unwrap();
@@ -194,7 +186,7 @@ impl Socket {
             } else if tcb.status == TcpStatus::SynRcvd {
                 self.synrcvd_handler(packet, tcb)?;
             } else {
-                println!("Unsupported Status");
+                dbg!("Unsupported Status");
                 break;
             }
         }
@@ -211,7 +203,6 @@ impl Socket {
         tcb.send_params.next = random();
         tcb.send_params.una = tcb.send_params.next;
         tcb.status = TcpStatus::SynRcvd;
-        println!("DEBUG: receive SYN !");
         self.send_tcp_packet(
             tcpflags::SYN | tcpflags::ACK,
             tcb.send_params.next,
@@ -219,7 +210,6 @@ impl Socket {
             tcb.send_params.window,
             &[],
         )?;
-        println!("DEBUG: Send SYN/ACK !");
         Ok(())
     }
 
@@ -228,9 +218,8 @@ impl Socket {
         tcb.send_params.una = packet.get_ack();
         tcb.send_params.window = packet.get_window_size();
         if tcb.send_params.una != tcb.send_params.next {
-            println!("SND.NXT don't match SND.UNA!");
+            dbg!("SND.NXT don't match SND.UNA!");
         }
-        println!("DEBUG: receive SYN/ACK !");
         self.send_tcp_packet(
             tcpflags::ACK,
             tcb.send_params.next,
@@ -239,14 +228,12 @@ impl Socket {
             &[],
         )?;
         tcb.status = TcpStatus::Established;
-        println!("DEBUG: Send ACK !");
         Ok(())
     }
 
     fn synrcvd_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
         tcb.send_params.una = packet.get_ack();
         tcb.status = TcpStatus::Established;
-        println!("DEBUG: receive ACK !");
         Ok(())
     }
 }
