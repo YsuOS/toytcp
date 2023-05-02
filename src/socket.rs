@@ -5,6 +5,8 @@ use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::packet::Packet;
 use pnet::transport::{self, TransportChannelType, TransportProtocol};
 use rand::{random, Rng};
+use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::{
     cmp,
     net::{IpAddr, Ipv4Addr},
@@ -48,6 +50,7 @@ pub enum TcpStatus {
 pub struct Socket {
     pub sock_id: RwLock<SockId>,
     tcb: RwLock<Tcb>,
+    retransmission_queue: Mutex<VecDeque<RetransmissionQueue>>,
 }
 
 impl Socket {
@@ -75,6 +78,7 @@ impl Socket {
                 },
                 recv_params: ReceiveParams { next: 0 },
             }),
+            retransmission_queue: Mutex::new(VecDeque::new()),
         });
         let cloned_socket = socket.clone();
         thread::spawn(move || {
@@ -175,7 +179,15 @@ impl Socket {
             MAX_PACKET_SIZE,
             TransportChannelType::Layer4(TransportProtocol::Ipv4(IpNextHeaderProtocols::Tcp)),
         )?;
-        sender.send_to(packet, IpAddr::V4(sock_id.remote_addr))?;
+        sender.send_to(packet.clone(), IpAddr::V4(sock_id.remote_addr))?;
+
+        if payload.is_empty() && packet.get_flag() == tcpflags::ACK {
+            // Don't need to enqueue to retransmission queue
+            return Ok(());
+        }
+        let mut queue = self.retransmission_queue.lock().unwrap();
+        queue.push_back(RetransmissionQueue::new(packet));
+
         Ok(())
     }
 
@@ -202,6 +214,8 @@ impl Socket {
                 self.synsent_handler(packet, tcb)?;
             } else if tcb.status == TcpStatus::SynRcvd {
                 self.synrcvd_handler(packet, tcb)?;
+            } else if tcb.status == TcpStatus::Established {
+                self.established_handler(packet, tcb)?;
             } else {
                 dbg!("Unsupported Status");
                 break;
@@ -258,6 +272,27 @@ impl Socket {
         tcb.status = TcpStatus::Established;
         Ok(())
     }
+
+    fn established_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
+        if packet.get_ack() <= tcb.send_params.next && packet.get_ack() > tcb.send_params.una {
+            tcb.send_params.una = packet.get_ack();
+            self.delete_segment_from_queue(tcb)?;
+        } else if packet.get_ack() > tcb.send_params.next {
+            dbg!("received ACK is too big than expected one");
+        }
+        Ok(())
+    }
+
+    fn delete_segment_from_queue(&self, tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
+        let mut queue = self.retransmission_queue.lock().unwrap();
+        while let Some(entry) = queue.pop_front() {
+            if entry.packet.get_ack() > tcb.send_params.una {
+                // the entry's packet has not ACKed. return to the queue
+                queue.push_front(entry);
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct SockId {
@@ -286,4 +321,18 @@ struct SendParams {
 
 struct ReceiveParams {
     next: u32,
+}
+
+struct RetransmissionQueue {
+    packet: TcpPacket,
+    transmission_count: u8,
+}
+
+impl RetransmissionQueue {
+    fn new(packet: TcpPacket) -> Self {
+        Self {
+            packet,
+            transmission_count: 1,
+        }
+    }
 }
