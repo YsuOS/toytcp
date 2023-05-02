@@ -49,6 +49,10 @@ impl TcpPacket {
         self.buffer[16..18].copy_from_slice(&checksum.to_be_bytes());
     }
 
+    pub fn set_payload(&mut self, payload: &[u8]) {
+        self.buffer[TCP_HEADER_SIZE..TCP_HEADER_SIZE + payload.len() as usize]
+            .copy_from_slice(payload);
+    }
     pub fn get_src(&self) -> u16 {
         u16::from_be_bytes([
         self.buffer[0],

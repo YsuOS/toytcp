@@ -1,20 +1,23 @@
 use crate::packet::TcpPacket;
 use crate::tcpflags;
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::packet::Packet;
 use pnet::transport::{self, TransportChannelType, TransportProtocol};
 use rand::{random, Rng};
-use std::net::{IpAddr, Ipv4Addr};
-use std::ops::Range;
-use std::sync::{Arc, RwLock, RwLockWriteGuard};
-use std::thread;
+use std::{
+    cmp,
+    net::{IpAddr, Ipv4Addr},
+    ops::Range,
+    sync::{Arc, RwLock, RwLockWriteGuard},
+    thread,
+};
 
 const UNDETERMINED_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 const UNDETERMINED_PORT: u16 = 0;
 //const MAX_TRANSMITTION: u8 = 5;
 //const RETRANSMITTION_TIMEOUT: u64 = 3;
-//const MSS: usize = 1460;
+const MSS: usize = 1460;
 //const PORT_RANGE: Range<u16> = 40000..60000;
 
 // How much data can be buffered on the socket
@@ -136,6 +139,24 @@ impl Socket {
         Ok(self)
     }
 
+    pub fn send(&self, buf: &[u8]) -> Result<()> {
+        let mut cursor = 0;
+        while cursor < buf.len() {
+            let send_size = cmp::min(MSS, buf.len() - cursor);
+            let mut tcb = self.tcb.write().unwrap();
+            self.send_tcp_packet(
+                tcpflags::ACK,
+                tcb.send_params.next,
+                tcb.recv_params.next,
+                tcb.send_params.window,
+                &buf[cursor..cursor + send_size],
+            )?;
+            cursor += send_size;
+            tcb.send_params.next += send_size as u32;
+        }
+        Ok(())
+    }
+
     fn send_tcp_packet(
         &self,
         flag: u8,
@@ -153,6 +174,7 @@ impl Socket {
         packet.set_seq(seq);
         packet.set_ack(ack);
         packet.set_window_size(win);
+        packet.set_payload(payload);
         packet.set_checksum(sock_id.local_addr, sock_id.remote_addr);
         let (mut sender, _) = transport::transport_channel(
             MAX_PACKET_SIZE,
@@ -193,7 +215,12 @@ impl Socket {
         Ok(())
     }
 
-    fn listen_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>, remote_addr: Ipv4Addr) -> Result<()> {
+    fn listen_handler(
+        &self,
+        packet: TcpPacket,
+        mut tcb: RwLockWriteGuard<Tcb>,
+        remote_addr: Ipv4Addr,
+    ) -> Result<()> {
         {
             let mut sock_id = self.sock_id.write().unwrap();
             sock_id.remote_addr = remote_addr;

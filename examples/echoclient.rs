@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::{env, net::Ipv4Addr};
+use std::{env, net::Ipv4Addr, io};
 use toytcp::socket::Socket;
 
 fn main() -> Result<()> {
@@ -12,7 +12,11 @@ fn main() -> Result<()> {
 
 fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
     let socket = Socket::connect(remote_addr, remote_port)?;
-    let sock_id = socket.sock_id.read().unwrap();
-    loop{}
+    loop{
+        let mut input = String::new();
+        io::stdin().read_line(&mut input);
+
+        socket.send(input.as_bytes())?;
+    }
     Ok(())
 }
