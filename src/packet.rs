@@ -1,5 +1,5 @@
-use std::net::Ipv4Addr;
 use pnet::packet::{ip::IpNextHeaderProtocols, util, Packet};
+use std::net::Ipv4Addr;
 
 const TCP_HEADER_SIZE: usize = 20;
 
@@ -53,11 +53,9 @@ impl TcpPacket {
         self.buffer[TCP_HEADER_SIZE..TCP_HEADER_SIZE + payload.len() as usize]
             .copy_from_slice(payload);
     }
+
     pub fn get_src(&self) -> u16 {
-        u16::from_be_bytes([
-        self.buffer[0],
-        self.buffer[1]
-        ])
+        u16::from_be_bytes([self.buffer[0], self.buffer[1]])
     }
 
     pub fn get_flag(&self) -> u8 {

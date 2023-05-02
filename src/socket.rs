@@ -67,7 +67,7 @@ impl Socket {
         let socket = Arc::new(Self {
             sock_id: RwLock::new(sock_id),
             tcb: RwLock::new(Tcb {
-                status: TcpStatus::Closed,
+                status,
                 send_params: SendParams {
                     next: 0,
                     una: 0,
@@ -102,7 +102,6 @@ impl Socket {
                 tcb.send_params.window,
                 &[],
             )?;
-            tcb.status = TcpStatus::SynSent;
             tcb.send_params.next += 1;
         }
         loop {
@@ -122,10 +121,6 @@ impl Socket {
             UNDETERMINED_PORT,
             TcpStatus::Listen,
         );
-        {
-            let mut tcb = socket.tcb.write().unwrap();
-            tcb.status = TcpStatus::Listen;
-        }
         Ok(socket)
     }
 
