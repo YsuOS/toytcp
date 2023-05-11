@@ -7,6 +7,7 @@ use pnet::transport::{self, TransportChannelType, TransportProtocol};
 use rand::{random, Rng};
 use std::collections::VecDeque;
 use std::sync::Mutex;
+use std::time::{Duration, SystemTime};
 use std::{
     cmp,
     net::{IpAddr, Ipv4Addr},
@@ -17,8 +18,8 @@ use std::{
 
 const UNDETERMINED_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);
 const UNDETERMINED_PORT: u16 = 0;
-//const MAX_TRANSMITTION: u8 = 5;
-//const RETRANSMITTION_TIMEOUT: u64 = 3;
+const MAX_TRANSMITTION: u8 = 5;
+const RETRANSMITTION_TIMEOUT: u64 = 3;
 const MSS: usize = 1460;
 //const PORT_RANGE: Range<u16> = 40000..60000;
 
@@ -84,6 +85,12 @@ impl Socket {
         thread::spawn(move || {
             cloned_socket.wait_tcp_packet().unwrap();
         });
+
+        let cloned_socket = socket.clone();
+        thread::spawn(move || {
+            cloned_socket.timer();
+        });
+
         socket
     }
 
@@ -107,6 +114,7 @@ impl Socket {
                 &[],
             )?;
             tcb.send_params.next += 1;
+            dbg!("Sent SYN");
         }
         loop {
             let tcb = socket.tcb.read().unwrap();
@@ -211,6 +219,7 @@ impl Socket {
             if tcb.status == TcpStatus::Listen {
                 self.listen_handler(packet, tcb, remote_addr)?;
             } else if tcb.status == TcpStatus::SynSent {
+                dbg!("Received SYN|ACK");
                 self.synsent_handler(packet, tcb)?;
             } else if tcb.status == TcpStatus::SynRcvd {
                 self.synrcvd_handler(packet, tcb)?;
@@ -263,6 +272,7 @@ impl Socket {
             tcb.send_params.window,
             &[],
         )?;
+        dbg!("Sent ACK");
         tcb.status = TcpStatus::Established;
         Ok(())
     }
@@ -274,7 +284,7 @@ impl Socket {
     }
 
     fn established_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
-        if packet.get_ack() <= tcb.send_params.next && packet.get_ack() > tcb.send_params.una {
+        if packet.get_ack() <= tcb.send_params.next && packet.get_ack() >= tcb.send_params.una {
             tcb.send_params.una = packet.get_ack();
             self.delete_segment_from_queue(tcb)?;
         } else if packet.get_ack() > tcb.send_params.next {
@@ -289,9 +299,56 @@ impl Socket {
             if entry.packet.get_ack() > tcb.send_params.una {
                 // the entry's packet has not ACKed. return to the queue
                 queue.push_front(entry);
+                break;
             }
         }
         Ok(())
+    }
+
+    fn timer(&self) {
+        loop {
+            {
+                let mut queue = self.retransmission_queue.lock().unwrap();
+
+                while let Some(mut entry) = queue.pop_front() {
+                    {
+                        // Remove entry that has already gotten ACK except Established state
+                        let tcb = self.tcb.read().unwrap();
+                        if tcb.send_params.una > entry.packet.get_seq() {
+                            continue;
+                        }
+                    }
+
+                    if entry.latest_transmission_time.elapsed().unwrap()
+                        < Duration::from_secs(RETRANSMITTION_TIMEOUT)
+                    {
+                        queue.push_front(entry);
+                        break;
+                    }
+
+                    if entry.transmission_count < MAX_TRANSMITTION {
+                        let (mut sender, _) = transport::transport_channel(
+                            MAX_PACKET_SIZE,
+                            TransportChannelType::Layer4(TransportProtocol::Ipv4(
+                                IpNextHeaderProtocols::Tcp,
+                            )),
+                        )
+                        .unwrap();
+                        let sock_id = self.sock_id.read().unwrap();
+                        dbg!("Retransmission");
+                        sender
+                            .send_to(entry.packet.clone(), IpAddr::V4(sock_id.remote_addr))
+                            .unwrap();
+                        entry.transmission_count += 1;
+                        entry.latest_transmission_time = SystemTime::now();
+                        queue.push_back(entry);
+                    } else {
+                        dbg!("reached MAX_TRANSMISSION");
+                    }
+                }
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 }
 
@@ -325,6 +382,7 @@ struct ReceiveParams {
 
 struct RetransmissionQueue {
     packet: TcpPacket,
+    latest_transmission_time: SystemTime,
     transmission_count: u8,
 }
 
@@ -332,6 +390,7 @@ impl RetransmissionQueue {
     fn new(packet: TcpPacket) -> Self {
         Self {
             packet,
+            latest_transmission_time: SystemTime::now(),
             transmission_count: 1,
         }
     }
