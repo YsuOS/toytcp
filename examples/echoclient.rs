@@ -16,7 +16,11 @@ fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
         let mut input = String::new();
         io::stdin().read_line(&mut input);
 
-        socket.send(input.as_bytes())?;
+        //socket.send(input.as_bytes())?;
+        // test for sliding window
+        loop {
+            socket.send(input.repeat(2000).as_bytes())?;
+        }
     }
     Ok(())
 }

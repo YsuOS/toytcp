@@ -149,7 +149,24 @@ impl Socket {
     pub fn send(&self, buf: &[u8]) -> Result<()> {
         let mut cursor = 0;
         while cursor < buf.len() {
-            let send_size = cmp::min(MSS, buf.len() - cursor);
+            let mut send_size = {
+                let tcb = self.tcb.read().unwrap();
+                cmp::min(
+                    MSS,
+                    cmp::min(tcb.send_params.window as usize, buf.len() - cursor),
+                )
+            };
+
+            while send_size == 0 {
+                send_size = {
+                    let tcb = self.tcb.read().unwrap();
+                    cmp::min(
+                        MSS,
+                        cmp::min(tcb.send_params.window as usize, buf.len() - cursor),
+                    )
+                };
+            }
+
             let mut tcb = self.tcb.write().unwrap();
             self.send_tcp_packet(
                 tcpflags::ACK,
@@ -160,6 +177,9 @@ impl Socket {
             )?;
             cursor += send_size;
             tcb.send_params.next += send_size as u32;
+            tcb.send_params.window -= send_size as u16;
+            //dbg!(tcb.send_params.window, send_size);
+            thread::sleep(Duration::from_millis(1));
         }
         Ok(())
     }
@@ -293,10 +313,14 @@ impl Socket {
         Ok(())
     }
 
-    fn delete_segment_from_queue(&self, tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
+    fn delete_segment_from_queue(&self, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
         let mut queue = self.retransmission_queue.lock().unwrap();
         while let Some(entry) = queue.pop_front() {
-            if entry.packet.get_ack() > tcb.send_params.una {
+            if entry.packet.get_ack() < tcb.send_params.una {
+                //dbg!("Successfully get acked");
+                //dbg!(tcb.send_params.window);
+                tcb.send_params.window += entry.packet.payload().len() as u16;
+            } else {
                 // the entry's packet has not ACKed. return to the queue
                 queue.push_front(entry);
                 break;
@@ -308,15 +332,14 @@ impl Socket {
     fn timer(&self) {
         loop {
             {
+                let mut tcb = self.tcb.write().unwrap();
                 let mut queue = self.retransmission_queue.lock().unwrap();
-
                 while let Some(mut entry) = queue.pop_front() {
-                    {
-                        // Remove entry that has already gotten ACK except Established state
-                        let tcb = self.tcb.read().unwrap();
-                        if tcb.send_params.una > entry.packet.get_seq() {
-                            continue;
-                        }
+                    // Remove entry that has already gotten ACK except Established state
+                    if tcb.send_params.una > entry.packet.get_seq() {
+                        //dbg!("Successfully get acked");
+                        tcb.send_params.window += entry.packet.payload().len() as u16;
+                        continue;
                     }
 
                     if entry.latest_transmission_time.elapsed().unwrap()
