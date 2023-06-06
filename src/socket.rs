@@ -77,7 +77,11 @@ impl Socket {
                     una: 0,
                     window: WINDOW_SIZE,
                 },
-                recv_params: ReceiveParams { next: 0 },
+                recv_params: ReceiveParams {
+                    next: 0,
+                    window: WINDOW_SIZE,
+                },
+                recv_buffer: vec![0; SOCKET_BUFFER_SIZE],
             }),
             retransmission_queue: Mutex::new(VecDeque::new()),
         });
@@ -182,6 +186,28 @@ impl Socket {
             thread::sleep(Duration::from_millis(1));
         }
         Ok(())
+    }
+
+    pub fn recv(&self, buf: &mut [u8]) -> Result<usize> {
+        let mut received_size = {
+            let tcb = self.tcb.read().unwrap();
+            tcb.recv_buffer.len() - tcb.recv_params.window as usize
+        };
+
+        while received_size == 0 {
+            received_size = {
+                let tcb = self.tcb.read().unwrap();
+                tcb.recv_buffer.len() - tcb.recv_params.window as usize
+            };
+        }
+
+        let copy_size = cmp::min(buf.len(), received_size);
+        let mut tcb = self.tcb.write().unwrap();
+        buf[..copy_size].copy_from_slice(&tcb.recv_buffer[..copy_size]);
+        tcb.recv_buffer.copy_within(copy_size.., 0);
+        tcb.recv_params.window += copy_size as u16;
+
+        Ok(copy_size)
     }
 
     fn send_tcp_packet(
@@ -391,6 +417,7 @@ struct Tcb {
     status: TcpStatus,
     send_params: SendParams,
     recv_params: ReceiveParams,
+    recv_buffer: Vec<u8>,
 }
 
 struct SendParams {
@@ -401,6 +428,7 @@ struct SendParams {
 
 struct ReceiveParams {
     next: u32,
+    window: u16,
 }
 
 struct RetransmissionQueue {
