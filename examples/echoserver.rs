@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::{env, net::Ipv4Addr};
+use std::{env, net::Ipv4Addr, str};
 use toytcp::socket::Socket;
 
 fn main() -> Result<()> {
@@ -12,8 +12,18 @@ fn main() -> Result<()> {
 
 fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
     let socket = Socket::listen(local_addr, local_port)?;
-    socket.accept()?;
     loop {
+        let connected_socket = socket.accept()?;
+
+        let mut buffer = [0; 1024];
+        loop {
+            let nbytes = connected_socket.recv(&mut buffer).unwrap();
+            if nbytes == 0 {
+                todo!();
+            }
+            print!("> {}", str::from_utf8(&buffer[..nbytes]).unwrap());
+            connected_socket.send(&buffer[..nbytes]).unwrap();
+        }
     }
     Ok(())
 }

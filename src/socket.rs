@@ -293,7 +293,6 @@ impl Socket {
         }
         tcb.recv_params.next = packet.get_seq() + 1;
         tcb.send_params.next = random();
-        tcb.send_params.una = tcb.send_params.next;
         tcb.status = TcpStatus::SynRcvd;
         self.send_tcp_packet(
             tcpflags::SYN | tcpflags::ACK,
@@ -302,6 +301,8 @@ impl Socket {
             tcb.recv_params.window,
             &[],
         )?;
+        tcb.send_params.next += 1;
+        tcb.send_params.una = tcb.send_params.next;
         Ok(())
     }
 
