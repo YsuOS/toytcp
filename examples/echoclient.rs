@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::{env, net::Ipv4Addr, io};
+use std::{env, net::Ipv4Addr, io, str};
 use toytcp::socket::Socket;
 
 fn main() -> Result<()> {
@@ -16,11 +16,15 @@ fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
         let mut input = String::new();
         io::stdin().read_line(&mut input);
 
-        //socket.send(input.as_bytes())?;
+        socket.send(input.as_bytes())?;
         // test for sliding window
-        loop {
-            socket.send(input.repeat(2000).as_bytes())?;
-        }
+        //loop {
+        //    socket.send(input.repeat(2000).as_bytes())?;
+        //}
+
+        let mut buffer = vec![0; 1500];
+        let n = socket.recv(&mut buffer)?;
+        print!("> {}", str::from_utf8(&buffer[..n])?);
     }
     Ok(())
 }
