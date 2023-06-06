@@ -79,6 +79,7 @@ impl Socket {
                 },
                 recv_params: ReceiveParams {
                     next: 0,
+                    tail: 0,
                     window: WINDOW_SIZE,
                 },
                 recv_buffer: vec![0; SOCKET_BUFFER_SIZE],
@@ -332,14 +333,19 @@ impl Socket {
     fn established_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
         if packet.get_ack() <= tcb.send_params.next && packet.get_ack() >= tcb.send_params.una {
             tcb.send_params.una = packet.get_ack();
-            self.delete_segment_from_queue(tcb)?;
+            self.delete_segment_from_queue(&mut tcb)?;
         } else if packet.get_ack() > tcb.send_params.next {
             dbg!("received ACK is too big than expected one");
         }
+
+        if !packet.payload().is_empty() {
+            self.process_payload(packet, tcb)?;
+        }
+
         Ok(())
     }
 
-    fn delete_segment_from_queue(&self, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
+    fn delete_segment_from_queue(&self, tcb: &mut RwLockWriteGuard<Tcb>) -> Result<()> {
         let mut queue = self.retransmission_queue.lock().unwrap();
         while let Some(entry) = queue.pop_front() {
             if entry.packet.get_ack() < tcb.send_params.una {
@@ -352,6 +358,35 @@ impl Socket {
                 break;
             }
         }
+        Ok(())
+    }
+
+    fn process_payload(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
+        let offset = tcb.recv_buffer.len() - tcb.recv_params.window as usize
+            + (packet.get_seq() - tcb.recv_params.next) as usize;
+        let copy_size = cmp::min(packet.payload().len(), tcb.recv_buffer.len() - offset);
+
+        tcb.recv_buffer[offset..offset + copy_size].copy_from_slice(&packet.payload()[..copy_size]);
+
+        tcb.recv_params.tail = cmp::max(tcb.recv_params.tail, packet.get_seq() + copy_size as u32);
+
+        if packet.get_seq() == tcb.recv_params.next {
+            tcb.recv_params.next = tcb.recv_params.tail;
+            tcb.recv_params.window -= (tcb.recv_params.tail - packet.get_seq()) as u16;
+        }
+
+        if copy_size > 0 {
+            self.send_tcp_packet(
+                tcpflags::ACK,
+                tcb.send_params.next,
+                tcb.recv_params.next,
+                tcb.recv_params.window,
+                &[],
+            )?;
+        } else {
+            dbg!("recv buffer overflow");
+        }
+
         Ok(())
     }
 
@@ -428,6 +463,7 @@ struct SendParams {
 
 struct ReceiveParams {
     next: u32,
+    tail: u32,
     window: u16,
 }
 
