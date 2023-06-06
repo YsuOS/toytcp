@@ -114,7 +114,7 @@ impl Socket {
                 tcpflags::SYN,
                 tcb.send_params.next,
                 0,
-                tcb.send_params.window,
+                tcb.recv_params.window,
                 &[],
             )?;
             tcb.send_params.next += 1;
@@ -176,7 +176,7 @@ impl Socket {
                 tcpflags::ACK,
                 tcb.send_params.next,
                 tcb.recv_params.next,
-                tcb.send_params.window,
+                tcb.recv_params.window,
                 &buf[cursor..cursor + send_size],
             )?;
             cursor += send_size;
@@ -298,7 +298,7 @@ impl Socket {
             tcpflags::SYN | tcpflags::ACK,
             tcb.send_params.next,
             tcb.recv_params.next,
-            tcb.send_params.window,
+            tcb.recv_params.window,
             &[],
         )?;
         Ok(())
@@ -315,7 +315,7 @@ impl Socket {
             tcpflags::ACK,
             tcb.send_params.next,
             tcb.recv_params.next,
-            tcb.send_params.window,
+            tcb.recv_params.window,
             &[],
         )?;
         dbg!("Sent ACK");
