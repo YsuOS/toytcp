@@ -11,19 +11,21 @@ fn main() -> Result<()> {
 }
 
 fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
-    let socket = Socket::listen(local_addr, local_port)?;
+    let sock_id = Socket::listen(local_addr, local_port)?;
     loop {
-        let connected_socket = socket.accept()?;
-
-        let mut buffer = [0; 1024];
-        loop {
-            let nbytes = connected_socket.recv(&mut buffer).unwrap();
-            if nbytes == 0 {
-                todo!();
+        let cloned_sock_id = sock_id.clone();
+        let connected_socket = Socket::accept(cloned_sock_id)?;
+        std::thread::spawn(move || {
+            let mut buffer = [0; 1024];
+            loop {
+                let nbytes = connected_socket.recv(&mut buffer).unwrap();
+                if nbytes == 0 {
+                    todo!();
+                }
+                print!("> {}", str::from_utf8(&buffer[..nbytes]).unwrap());
+                connected_socket.send(&buffer[..nbytes]).unwrap();
             }
-            print!("> {}", str::from_utf8(&buffer[..nbytes]).unwrap());
-            connected_socket.send(&buffer[..nbytes]).unwrap();
-        }
+        });
     }
     Ok(())
 }

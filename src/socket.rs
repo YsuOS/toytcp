@@ -55,19 +55,7 @@ pub struct Socket {
 }
 
 impl Socket {
-    pub fn new(
-        local_addr: Ipv4Addr,
-        local_port: u16,
-        remote_addr: Ipv4Addr,
-        remote_port: u16,
-        status: TcpStatus,
-    ) -> Arc<Self> {
-        let sock_id = SockId {
-            local_addr,
-            remote_addr,
-            local_port,
-            remote_port,
-        };
+    pub fn new(sock_id: SockId, status: TcpStatus) -> Arc<Self> {
         let socket = Arc::new(Self {
             sock_id: RwLock::new(sock_id),
             tcb: RwLock::new(Tcb {
@@ -100,13 +88,13 @@ impl Socket {
     }
 
     pub fn connect(remote_addr: Ipv4Addr, remote_port: u16) -> Result<Arc<Socket>> {
-        let socket = Socket::new(
-            LOCAL_ADDR,
-            set_unsed_port().unwrap(),
+        let sock_id = SockId {
+            local_addr: LOCAL_ADDR,
+            local_port: set_unsed_port().unwrap(),
             remote_addr,
             remote_port,
-            TcpStatus::SynSent,
-        );
+        };
+        let socket = Socket::new(sock_id, TcpStatus::SynSent);
         {
             let mut tcb = socket.tcb.write().unwrap();
             tcb.send_params.next = random();
@@ -130,25 +118,25 @@ impl Socket {
         Ok(socket)
     }
 
-    pub fn listen(local_addr: Ipv4Addr, local_port: u16) -> Result<Arc<Socket>> {
-        let socket = Socket::new(
+    pub fn listen(local_addr: Ipv4Addr, local_port: u16) -> Result<SockId> {
+        Ok(SockId {
             local_addr,
+            remote_addr: UNDETERMINED_ADDR,
             local_port,
-            UNDETERMINED_ADDR,
-            UNDETERMINED_PORT,
-            TcpStatus::Listen,
-        );
-        Ok(socket)
+            remote_port: UNDETERMINED_PORT,
+        })
     }
 
-    pub fn accept(&self) -> Result<&Socket> {
+    pub fn accept(sock_id: SockId) -> Result<Arc<Socket>> {
+        let socket = Socket::new(sock_id, TcpStatus::Listen);
+
         loop {
-            let tcb = self.tcb.read().unwrap();
+            let tcb = socket.tcb.read().unwrap();
             if tcb.status == TcpStatus::Established {
                 break;
             }
         }
-        Ok(self)
+        Ok(socket)
     }
 
     pub fn send(&self, buf: &[u8]) -> Result<()> {
@@ -437,6 +425,7 @@ impl Socket {
     }
 }
 
+#[derive(Clone)]
 pub struct SockId {
     pub local_addr: Ipv4Addr,
     pub remote_addr: Ipv4Addr,
