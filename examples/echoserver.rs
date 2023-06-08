@@ -1,6 +1,6 @@
 use anyhow::Result;
 use std::{env, net::Ipv4Addr, str};
-use toytcp::socket::Socket;
+use toytcp::socket::{Socket, SockId};
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -11,7 +11,7 @@ fn main() -> Result<()> {
 }
 
 fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
-    let sock_id = Socket::listen(local_addr, local_port)?;
+    let sock_id = SockId::listen(local_addr, local_port)?;
     loop {
         let cloned_sock_id = sock_id.clone();
         let connected_socket = Socket::accept(cloned_sock_id)?;

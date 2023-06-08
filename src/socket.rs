@@ -118,15 +118,6 @@ impl Socket {
         Ok(socket)
     }
 
-    pub fn listen(local_addr: Ipv4Addr, local_port: u16) -> Result<SockId> {
-        Ok(SockId {
-            local_addr,
-            remote_addr: UNDETERMINED_ADDR,
-            local_port,
-            remote_port: UNDETERMINED_PORT,
-        })
-    }
-
     pub fn accept(sock_id: SockId) -> Result<Arc<Socket>> {
         let socket = Socket::new(sock_id, TcpStatus::Listen);
 
@@ -431,6 +422,17 @@ pub struct SockId {
     pub remote_addr: Ipv4Addr,
     pub local_port: u16,
     pub remote_port: u16,
+}
+
+impl SockId {
+    pub fn listen(local_addr: Ipv4Addr, local_port: u16) -> Result<SockId> {
+        Ok(SockId {
+            local_addr,
+            remote_addr: UNDETERMINED_ADDR,
+            local_port,
+            remote_port: UNDETERMINED_PORT,
+        })
+    }
 }
 
 fn set_unsed_port() -> Result<u16> {
