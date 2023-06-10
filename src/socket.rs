@@ -175,6 +175,14 @@ impl Socket {
         };
 
         while received_size == 0 {
+            {
+                let tcb = self.tcb.read().unwrap();
+                match tcb.status {
+                    TcpStatus::CloseWait | TcpStatus::LastAck | TcpStatus::TimeWait => break,
+                    _ => {}
+                }
+            }
+
             received_size = {
                 let tcb = self.tcb.read().unwrap();
                 tcb.recv_buffer.len() - tcb.recv_params.window as usize
@@ -188,6 +196,29 @@ impl Socket {
         tcb.recv_params.window += copy_size as u16;
 
         Ok(copy_size)
+    }
+
+    pub fn close(&self) -> Result<()> {
+        let mut tcb = self.tcb.write().unwrap();
+        self.send_tcp_packet(
+            tcpflags::FIN | tcpflags::ACK,
+            tcb.send_params.next,
+            tcb.recv_params.next,
+            tcb.recv_params.window,
+            &[],
+        )?;
+        tcb.send_params.next += 1;
+
+        match tcb.status {
+            TcpStatus::Established => {
+                tcb.status = TcpStatus::FinWait1;
+            }
+            TcpStatus::CloseWait => {
+                tcb.status = TcpStatus::LastAck;
+            }
+            _ => return Ok(()),
+        }
+        Ok(())
     }
 
     fn send_tcp_packet(
@@ -251,6 +282,10 @@ impl Socket {
                 self.synrcvd_handler(packet, tcb)?;
             } else if tcb.status == TcpStatus::Established {
                 self.established_handler(packet, tcb)?;
+            } else if tcb.status == TcpStatus::CloseWait || tcb.status == TcpStatus::LastAck {
+                self.close_handler(packet, tcb)?;
+            } else if tcb.status == TcpStatus::FinWait1 || tcb.status == TcpStatus::FinWait2 {
+                self.finwait_handler(packet, tcb)?;
             } else {
                 dbg!("Unsupported Status");
                 break;
@@ -319,7 +354,55 @@ impl Socket {
         }
 
         if !packet.payload().is_empty() {
-            self.process_payload(packet, tcb)?;
+            self.process_payload(&packet, &mut tcb)?;
+        }
+
+        if packet.get_flag() & tcpflags::FIN > 0 {
+            tcb.recv_params.next = packet.get_seq() + 1;
+            self.send_tcp_packet(
+                tcpflags::ACK,
+                tcb.send_params.next,
+                tcb.recv_params.next,
+                tcb.recv_params.window,
+                &[],
+            )?;
+            tcb.status = TcpStatus::CloseWait;
+        }
+
+        Ok(())
+    }
+
+    fn close_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
+        tcb.send_params.una = packet.get_ack();
+        Ok(())
+    }
+
+    fn finwait_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
+        if packet.get_ack() <= tcb.send_params.next && packet.get_ack() >= tcb.send_params.una {
+            tcb.send_params.una = packet.get_ack();
+            self.delete_segment_from_queue(&mut tcb)?;
+        } else if packet.get_ack() > tcb.send_params.next {
+            dbg!("received ACK is too big than expected one");
+        }
+
+        if !packet.payload().is_empty() {
+            self.process_payload(&packet, &mut tcb)?;
+        }
+
+        if tcb.status == TcpStatus::FinWait1 && tcb.send_params.next == tcb.send_params.una {
+            tcb.status = TcpStatus::FinWait2;
+        }
+
+        if packet.get_flag() & tcpflags::FIN > 0 {
+            tcb.recv_params.next += 1;
+            self.send_tcp_packet(
+                tcpflags::ACK,
+                tcb.send_params.next,
+                tcb.recv_params.next,
+                tcb.recv_params.window,
+                &[],
+            )?;
+            // Change status to TIMEWAIT. but its implementation is omitted.
         }
 
         Ok(())
@@ -341,7 +424,7 @@ impl Socket {
         Ok(())
     }
 
-    fn process_payload(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
+    fn process_payload(&self, packet: &TcpPacket, tcb: &mut RwLockWriteGuard<Tcb>) -> Result<()> {
         let offset = tcb.recv_buffer.len() - tcb.recv_params.window as usize
             + (packet.get_seq() - tcb.recv_params.next) as usize;
         let copy_size = cmp::min(packet.payload().len(), tcb.recv_buffer.len() - offset);
@@ -380,6 +463,11 @@ impl Socket {
                     if tcb.send_params.una > entry.packet.get_seq() {
                         //dbg!("Successfully get acked");
                         tcb.send_params.window += entry.packet.payload().len() as u16;
+                        if entry.packet.get_flag() & tcpflags::FIN > 0
+                            && tcb.status == TcpStatus::LastAck
+                        {
+                            dbg!("connection closed");
+                        }
                         continue;
                     }
 
@@ -408,6 +496,13 @@ impl Socket {
                         queue.push_back(entry);
                     } else {
                         dbg!("reached MAX_TRANSMISSION");
+                        if entry.packet.get_flag() & tcpflags::FIN > 0
+                            && (tcb.status == TcpStatus::LastAck
+                                || tcb.status == TcpStatus::FinWait1
+                                || tcb.status == TcpStatus::FinWait2)
+                        {
+                            dbg!("connection closed");
+                        }
                     }
                 }
             }

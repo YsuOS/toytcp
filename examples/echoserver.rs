@@ -20,12 +20,13 @@ fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
             loop {
                 let nbytes = connected_socket.recv(&mut buffer).unwrap();
                 if nbytes == 0 {
-                    todo!();
+                    dbg!("closing connection");
+                    connected_socket.close().unwrap();
+                    return;
                 }
                 print!("> {}", str::from_utf8(&buffer[..nbytes]).unwrap());
                 connected_socket.send(&buffer[..nbytes]).unwrap();
             }
         });
     }
-    Ok(())
 }

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::{env, net::Ipv4Addr, io, str};
+use std::{env, io, net::Ipv4Addr, str};
 use toytcp::socket::Socket;
 
 fn main() -> Result<()> {
@@ -12,9 +12,15 @@ fn main() -> Result<()> {
 
 fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
     let socket = Socket::connect(remote_addr, remote_port)?;
-    loop{
+    let cloned_socket = socket.clone();
+    ctrlc::set_handler(move || {
+        cloned_socket.close().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::process::exit(0);
+    })?;
+    loop {
         let mut input = String::new();
-        io::stdin().read_line(&mut input);
+        io::stdin().read_line(&mut input)?;
 
         socket.send(input.as_bytes())?;
         // test for sliding window
@@ -26,5 +32,4 @@ fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
         let n = socket.recv(&mut buffer)?;
         print!("> {}", str::from_utf8(&buffer[..n])?);
     }
-    Ok(())
 }
