@@ -273,22 +273,20 @@ impl Socket {
             }
 
             let tcb = self.tcb.write().unwrap();
-            if tcb.status == TcpStatus::Listen {
-                self.listen_handler(packet, tcb, remote_addr)?;
-            } else if tcb.status == TcpStatus::SynSent {
-                dbg!("Received SYN|ACK");
-                self.synsent_handler(packet, tcb)?;
-            } else if tcb.status == TcpStatus::SynRcvd {
-                self.synrcvd_handler(packet, tcb)?;
-            } else if tcb.status == TcpStatus::Established {
-                self.established_handler(packet, tcb)?;
-            } else if tcb.status == TcpStatus::CloseWait || tcb.status == TcpStatus::LastAck {
-                self.close_handler(packet, tcb)?;
-            } else if tcb.status == TcpStatus::FinWait1 || tcb.status == TcpStatus::FinWait2 {
-                self.finwait_handler(packet, tcb)?;
-            } else {
-                dbg!("Unsupported Status");
-                break;
+            match tcb.status {
+                TcpStatus::Listen => self.listen_handler(packet, tcb, remote_addr)?,
+                TcpStatus::SynSent => {
+                    dbg!("Received SYN|ACK");
+                    self.synsent_handler(packet, tcb)?;
+                }
+                TcpStatus::SynRcvd => self.synrcvd_handler(packet, tcb)?,
+                TcpStatus::Established => self.established_handler(packet, tcb)?,
+                TcpStatus::CloseWait | TcpStatus::LastAck => self.close_handler(packet, tcb)?,
+                TcpStatus::FinWait1 | TcpStatus::FinWait2 => self.finwait_handler(packet, tcb)?,
+                _ => {
+                    dbg!("Unsupported Status");
+                    break;
+                }
             }
         }
         Ok(())
