@@ -1,11 +1,10 @@
 use anyhow::Result;
-use std::{env, io, net::Ipv4Addr, str};
-use toytcp::socket::Socket;
+use std::{io, net::Ipv4Addr, str};
+use toytcp::{parse_args, socket::Socket};
 
 fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
-    let addr: Ipv4Addr = args[1].parse()?;
-    let port: u16 = args[2].parse()?;
+    let (addr, port) = parse_args()?;
+
     echo_client(addr, port)?;
     Ok(())
 }
