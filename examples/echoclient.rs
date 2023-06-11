@@ -10,7 +10,9 @@ fn main() -> Result<()> {
 }
 
 fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
-    let socket = Socket::connect(remote_addr, remote_port)?;
+    let socket = Socket::new();
+    socket.connect(remote_addr, remote_port)?;
+
     let cloned_socket = socket.clone();
     ctrlc::set_handler(move || {
         cloned_socket.close().unwrap();

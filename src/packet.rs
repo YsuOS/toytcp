@@ -3,7 +3,7 @@ use std::net::Ipv4Addr;
 
 const TCP_HEADER_SIZE: usize = 20;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct TcpPacket {
     buffer: Vec<u8>,
 }

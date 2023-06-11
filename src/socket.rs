@@ -34,7 +34,7 @@ const MAX_PACKET_SIZE: usize = 65535;
 const LOCAL_ADDR: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
 const PORT_RANGE: Range<u16> = 40000..60000;
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum TcpStatus {
     Closed,
     Listen,
@@ -48,6 +48,7 @@ pub enum TcpStatus {
     LastAck,
 }
 
+#[derive(Debug)]
 pub struct Socket {
     pub sock_id: RwLock<SockId>,
     tcb: RwLock<Tcb>,
@@ -55,7 +56,39 @@ pub struct Socket {
 }
 
 impl Socket {
-    pub fn new(sock_id: SockId, status: TcpStatus) -> Arc<Self> {
+    pub fn new() -> Arc<Self> {
+        let socket = Arc::new(Self {
+            sock_id: RwLock::new(SockId::new().unwrap()),
+            tcb: RwLock::new(Tcb {
+                status: TcpStatus::Closed,
+                send_params: SendParams {
+                    next: 0,
+                    una: 0,
+                    window: WINDOW_SIZE,
+                },
+                recv_params: ReceiveParams {
+                    next: 0,
+                    tail: 0,
+                    window: WINDOW_SIZE,
+                },
+                recv_buffer: vec![0; SOCKET_BUFFER_SIZE],
+            }),
+            retransmission_queue: Mutex::new(VecDeque::new()),
+        });
+        let cloned_socket = socket.clone();
+        thread::spawn(move || {
+            cloned_socket.wait_tcp_packet().unwrap();
+        });
+
+        let cloned_socket = socket.clone();
+        thread::spawn(move || {
+            cloned_socket.timer();
+        });
+
+        socket
+    }
+
+    pub fn new_tmp(sock_id: SockId, status: TcpStatus) -> Arc<Self> {
         let socket = Arc::new(Self {
             sock_id: RwLock::new(sock_id),
             tcb: RwLock::new(Tcb {
@@ -87,39 +120,68 @@ impl Socket {
         socket
     }
 
-    pub fn connect(remote_addr: Ipv4Addr, remote_port: u16) -> Result<Arc<Socket>> {
-        let sock_id = SockId {
-            local_addr: LOCAL_ADDR,
-            local_port: set_unsed_port().unwrap(),
+    pub fn connect(&self, remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
+        let local_addr = LOCAL_ADDR;
+        let local_port = set_unsed_port().unwrap();
+
+        self.set_sockid(local_addr, local_port, remote_addr, remote_port);
+        self.init_seq();
+
+        self.send_tcp_packet_lock(TcpStatus::SynSent);
+
+        self.wait_tcp_status(TcpStatus::Established);
+
+        Ok(())
+    }
+
+    fn set_sockid(
+        &self,
+        local_addr: Ipv4Addr,
+        local_port: u16,
+        remote_addr: Ipv4Addr,
+        remote_port: u16,
+    ) {
+        let mut sock_id = self.sock_id.write().unwrap();
+        *sock_id = SockId {
+            local_addr,
+            local_port,
             remote_addr,
             remote_port,
         };
-        let socket = Socket::new(sock_id, TcpStatus::SynSent);
-        {
-            let mut tcb = socket.tcb.write().unwrap();
-            tcb.send_params.next = random();
-            tcb.send_params.una = tcb.send_params.next;
-            socket.send_tcp_packet(
-                tcpflags::SYN,
-                tcb.send_params.next,
-                0,
-                tcb.recv_params.window,
-                &[],
-            )?;
-            tcb.send_params.next += 1;
-            dbg!("Sent SYN");
-        }
+    }
+
+    fn init_seq(&self) {
+        let mut tcb = self.tcb.write().unwrap();
+        tcb.send_params.next = random();
+        tcb.send_params.una = tcb.send_params.next;
+        dbg!(self, &tcb.send_params, &tcb.recv_params);
+    }
+
+    fn wait_tcp_status(&self, status: TcpStatus) {
         loop {
-            let tcb = socket.tcb.read().unwrap();
-            if tcb.status == TcpStatus::Established {
+            let tcb = self.tcb.read().unwrap();
+            if tcb.status == status {
                 break;
             }
         }
-        Ok(socket)
+    }
+
+    fn send_tcp_packet_lock(&self, status: TcpStatus) {
+        let mut tcb = self.tcb.write().unwrap();
+        self.send_tcp_packet(
+            tcpflags::SYN,
+            tcb.send_params.next,
+            0,
+            tcb.recv_params.window,
+            &[],
+        ).unwrap();
+        tcb.status = status;
+        tcb.send_params.next += 1;
+        dbg!(&tcb.status);
     }
 
     pub fn accept(sock_id: SockId) -> Result<Arc<Socket>> {
-        let socket = Socket::new(sock_id, TcpStatus::Listen);
+        let socket = Socket::new_tmp(sock_id, TcpStatus::Listen);
 
         loop {
             let tcb = socket.tcb.read().unwrap();
@@ -509,7 +571,7 @@ impl Socket {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SockId {
     pub local_addr: Ipv4Addr,
     pub remote_addr: Ipv4Addr,
@@ -518,6 +580,24 @@ pub struct SockId {
 }
 
 impl SockId {
+    pub fn new() -> Result<Self> {
+        Ok(SockId {
+            local_addr: UNDETERMINED_ADDR,
+            local_port: UNDETERMINED_PORT,
+            remote_addr: UNDETERMINED_ADDR,
+            remote_port: UNDETERMINED_PORT,
+        })
+    }
+
+    pub fn new_tmp(remote_addr: Ipv4Addr, remote_port: u16) -> Result<Self> {
+        Ok(SockId {
+            local_addr: LOCAL_ADDR,
+            local_port: set_unsed_port().unwrap(),
+            remote_addr,
+            remote_port,
+        })
+    }
+
     pub fn listen(local_addr: Ipv4Addr, local_port: u16) -> Result<SockId> {
         Ok(SockId {
             local_addr,
@@ -533,6 +613,7 @@ fn set_unsed_port() -> Result<u16> {
     Ok(rng.gen_range(PORT_RANGE))
 }
 
+#[derive(Debug)]
 struct Tcb {
     status: TcpStatus,
     send_params: SendParams,
@@ -540,18 +621,21 @@ struct Tcb {
     recv_buffer: Vec<u8>,
 }
 
+#[derive(Debug)]
 struct SendParams {
     next: u32,
     una: u32,
     window: u16,
 }
 
+#[derive(Debug)]
 struct ReceiveParams {
     next: u32,
     tail: u32,
     window: u16,
 }
 
+#[derive(Debug)]
 struct RetransmissionQueue {
     packet: TcpPacket,
     latest_transmission_time: SystemTime,
