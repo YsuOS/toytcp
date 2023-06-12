@@ -88,38 +88,6 @@ impl Socket {
         socket
     }
 
-    pub fn new_tmp(sock_id: SockId, status: TcpStatus) -> Arc<Self> {
-        let socket = Arc::new(Self {
-            sock_id: RwLock::new(sock_id),
-            tcb: RwLock::new(Tcb {
-                status,
-                send_params: SendParams {
-                    next: 0,
-                    una: 0,
-                    window: WINDOW_SIZE,
-                },
-                recv_params: ReceiveParams {
-                    next: 0,
-                    tail: 0,
-                    window: WINDOW_SIZE,
-                },
-                recv_buffer: vec![0; SOCKET_BUFFER_SIZE],
-            }),
-            retransmission_queue: Mutex::new(VecDeque::new()),
-        });
-        let cloned_socket = socket.clone();
-        thread::spawn(move || {
-            cloned_socket.wait_tcp_packet().unwrap();
-        });
-
-        let cloned_socket = socket.clone();
-        thread::spawn(move || {
-            cloned_socket.timer();
-        });
-
-        socket
-    }
-
     pub fn connect(&self, remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
         let local_addr = LOCAL_ADDR;
         let local_port = set_unsed_port().unwrap();
@@ -132,6 +100,21 @@ impl Socket {
         self.wait_tcp_status(TcpStatus::Established);
 
         Ok(())
+    }
+
+    pub fn listen(&self, local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
+        let remote_addr = UNDETERMINED_ADDR;
+        let remote_port = UNDETERMINED_PORT;
+
+        self.set_sockid(local_addr, local_port, remote_addr, remote_port);
+
+        self.set_status(TcpStatus::Listen);
+        Ok(())
+    }
+
+    fn set_status(&self, status: TcpStatus) {
+        let mut tcb = self.tcb.write().unwrap();
+        tcb.status = status;
     }
 
     fn set_sockid(
@@ -148,6 +131,11 @@ impl Socket {
             remote_addr,
             remote_port,
         };
+    }
+
+    fn get_local(&self) -> Result<(Ipv4Addr, u16)> {
+        let sock_id = self.sock_id.read().unwrap();
+        Ok((sock_id.local_addr, sock_id.local_port))
     }
 
     fn init_seq(&self) {
@@ -180,16 +168,9 @@ impl Socket {
         dbg!(&tcb.status);
     }
 
-    pub fn accept(sock_id: SockId) -> Result<Arc<Socket>> {
-        let socket = Socket::new_tmp(sock_id, TcpStatus::Listen);
-
-        loop {
-            let tcb = socket.tcb.read().unwrap();
-            if tcb.status == TcpStatus::Established {
-                break;
-            }
-        }
-        Ok(socket)
+    pub fn accept(&self) -> Result<()> {
+        self.wait_tcp_status(TcpStatus::Established);
+        Ok(())
     }
 
     pub fn send(&self, buf: &[u8]) -> Result<()> {
@@ -324,27 +305,29 @@ impl Socket {
             TransportChannelType::Layer3(IpNextHeaderProtocols::Tcp),
         )?;
         let mut packet_iter = transport::ipv4_packet_iter(&mut receiver);
+
         loop {
             let (packet, _) = packet_iter.next().unwrap();
+
             let local_addr = packet.get_destination();
             let remote_addr = packet.get_source();
-            let packet =
+            let tcp_packet =
                 TcpPacket::from(pnet::packet::tcp::TcpPacket::new(packet.payload()).unwrap());
-            if !packet.is_correct_checksum(local_addr, remote_addr) {
+            if !tcp_packet.is_correct_checksum(local_addr, remote_addr) {
                 dbg!("invalid checksum");
             }
 
             let tcb = self.tcb.write().unwrap();
             match tcb.status {
-                TcpStatus::Listen => self.listen_handler(packet, tcb, remote_addr)?,
+                TcpStatus::Listen => self.listen_handler(tcp_packet, tcb, remote_addr)?,
                 TcpStatus::SynSent => {
                     dbg!("Received SYN|ACK");
-                    self.synsent_handler(packet, tcb)?;
+                    self.synsent_handler(tcp_packet, tcb)?;
                 }
-                TcpStatus::SynRcvd => self.synrcvd_handler(packet, tcb)?,
-                TcpStatus::Established => self.established_handler(packet, tcb)?,
-                TcpStatus::CloseWait | TcpStatus::LastAck => self.close_handler(packet, tcb)?,
-                TcpStatus::FinWait1 | TcpStatus::FinWait2 => self.finwait_handler(packet, tcb)?,
+                TcpStatus::SynRcvd => self.synrcvd_handler(tcp_packet, tcb)?,
+                TcpStatus::Established => self.established_handler(tcp_packet, tcb)?,
+                TcpStatus::CloseWait | TcpStatus::LastAck => self.close_handler(tcp_packet, tcb)?,
+                TcpStatus::FinWait1 | TcpStatus::FinWait2 => self.finwait_handler(tcp_packet, tcb)?,
                 _ => {
                     dbg!("Unsupported Status");
                     break;
@@ -360,14 +343,15 @@ impl Socket {
         mut tcb: RwLockWriteGuard<Tcb>,
         remote_addr: Ipv4Addr,
     ) -> Result<()> {
-        {
-            let mut sock_id = self.sock_id.write().unwrap();
-            sock_id.remote_addr = remote_addr;
-            sock_id.remote_port = packet.get_src();
-        }
+        let (local_addr, local_port) = self.get_local().unwrap();
+        let remote_port = packet.get_src();
+        self.set_sockid(local_addr, local_port, remote_addr, remote_port);
+
         tcb.recv_params.next = packet.get_seq() + 1;
+
         tcb.send_params.next = random();
-        tcb.status = TcpStatus::SynRcvd;
+        tcb.send_params.una = tcb.send_params.next;
+
         self.send_tcp_packet(
             tcpflags::SYN | tcpflags::ACK,
             tcb.send_params.next,
@@ -375,8 +359,10 @@ impl Socket {
             tcb.recv_params.window,
             &[],
         )?;
+        tcb.status = TcpStatus::SynRcvd;
         tcb.send_params.next += 1;
-        tcb.send_params.una = tcb.send_params.next;
+
+        dbg!(&tcb.status);
         Ok(())
     }
 
@@ -585,24 +571,6 @@ impl SockId {
             local_addr: UNDETERMINED_ADDR,
             local_port: UNDETERMINED_PORT,
             remote_addr: UNDETERMINED_ADDR,
-            remote_port: UNDETERMINED_PORT,
-        })
-    }
-
-    pub fn new_tmp(remote_addr: Ipv4Addr, remote_port: u16) -> Result<Self> {
-        Ok(SockId {
-            local_addr: LOCAL_ADDR,
-            local_port: set_unsed_port().unwrap(),
-            remote_addr,
-            remote_port,
-        })
-    }
-
-    pub fn listen(local_addr: Ipv4Addr, local_port: u16) -> Result<SockId> {
-        Ok(SockId {
-            local_addr,
-            remote_addr: UNDETERMINED_ADDR,
-            local_port,
             remote_port: UNDETERMINED_PORT,
         })
     }
