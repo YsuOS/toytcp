@@ -95,7 +95,7 @@ impl Socket {
         self.set_sockid(local_addr, local_port, remote_addr, remote_port);
         self.init_seq_lock();
 
-        self.send_tcp_packet_lock(TcpStatus::SynSent);
+        self.send_tcp_packet_lock(tcpflags::SYN, TcpStatus::SynSent);
 
         self.wait_tcp_status(TcpStatus::Established);
 
@@ -156,20 +156,6 @@ impl Socket {
                 break;
             }
         }
-    }
-
-    fn send_tcp_packet_lock(&self, status: TcpStatus) {
-        let mut tcb = self.tcb.write().unwrap();
-        self.send_tcp_packet(
-            tcpflags::SYN,
-            tcb.send_params.next,
-            0,
-            tcb.recv_params.window,
-            &[],
-        ).unwrap();
-        tcb.status = status;
-        tcb.send_params.next += 1;
-        dbg!(&tcb.status);
     }
 
     pub fn accept(&self) -> Result<()> {
@@ -331,7 +317,9 @@ impl Socket {
                 TcpStatus::SynRcvd => self.synrcvd_handler(tcp_packet, tcb)?,
                 TcpStatus::Established => self.established_handler(tcp_packet, tcb)?,
                 TcpStatus::CloseWait | TcpStatus::LastAck => self.close_handler(tcp_packet, tcb)?,
-                TcpStatus::FinWait1 | TcpStatus::FinWait2 => self.finwait_handler(tcp_packet, tcb)?,
+                TcpStatus::FinWait1 | TcpStatus::FinWait2 => {
+                    self.finwait_handler(tcp_packet, tcb)?
+                }
                 _ => {
                     dbg!("Unsupported Status");
                     break;
@@ -354,18 +342,28 @@ impl Socket {
         tcb.recv_params.next = packet.get_seq() + 1;
         self.init_seq(&mut tcb);
 
+        self.send_tcp_packet_tcb(tcpflags::SYN | tcpflags::ACK, TcpStatus::SynRcvd, &mut tcb);
+
+        Ok(())
+    }
+
+    fn send_tcp_packet_lock(&self, flag: u8, status: TcpStatus) {
+        let mut tcb = self.tcb.write().unwrap();
+        self.send_tcp_packet_tcb(flag, status, &mut tcb);
+    }
+
+    fn send_tcp_packet_tcb(&self, flag: u8, status: TcpStatus, tcb: &mut RwLockWriteGuard<Tcb>) {
         self.send_tcp_packet(
-            tcpflags::SYN | tcpflags::ACK,
+            flag,
             tcb.send_params.next,
             tcb.recv_params.next,
             tcb.recv_params.window,
             &[],
-        )?;
-        tcb.status = TcpStatus::SynRcvd;
+        )
+        .unwrap();
+        tcb.status = status;
         tcb.send_params.next += 1;
-
         dbg!(&tcb.status);
-        Ok(())
     }
 
     fn synsent_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
