@@ -93,7 +93,7 @@ impl Socket {
         let local_port = set_unsed_port().unwrap();
 
         self.set_sockid(local_addr, local_port, remote_addr, remote_port);
-        self.init_seq();
+        self.init_seq_lock();
 
         self.send_tcp_packet_lock(TcpStatus::SynSent);
 
@@ -138,8 +138,12 @@ impl Socket {
         Ok((sock_id.local_addr, sock_id.local_port))
     }
 
-    fn init_seq(&self) {
+    fn init_seq_lock(&self) {
         let mut tcb = self.tcb.write().unwrap();
+        self.init_seq(&mut tcb);
+    }
+
+    fn init_seq(&self, tcb: &mut RwLockWriteGuard<Tcb>) {
         tcb.send_params.next = random();
         tcb.send_params.una = tcb.send_params.next;
         dbg!(self, &tcb.send_params, &tcb.recv_params);
@@ -348,9 +352,7 @@ impl Socket {
         self.set_sockid(local_addr, local_port, remote_addr, remote_port);
 
         tcb.recv_params.next = packet.get_seq() + 1;
-
-        tcb.send_params.next = random();
-        tcb.send_params.una = tcb.send_params.next;
+        self.init_seq(&mut tcb);
 
         self.send_tcp_packet(
             tcpflags::SYN | tcpflags::ACK,
@@ -370,9 +372,11 @@ impl Socket {
         tcb.recv_params.next = packet.get_seq() + 1;
         tcb.send_params.una = packet.get_ack();
         tcb.send_params.window = packet.get_window_size();
+
         if tcb.send_params.una != tcb.send_params.next {
             dbg!("SND.NXT don't match SND.UNA!");
         }
+
         self.send_tcp_packet(
             tcpflags::ACK,
             tcb.send_params.next,
