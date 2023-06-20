@@ -59,6 +59,10 @@ impl TcpPacket {
         u16::from_be_bytes([self.buffer[0], self.buffer[1]])
     }
 
+    pub fn get_dst(&self) -> u16 {
+        u16::from_be_bytes([self.buffer[2], self.buffer[3]])
+    }
+
     pub fn get_flag(&self) -> u8 {
         self.buffer[13]
     }
