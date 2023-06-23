@@ -21,11 +21,11 @@ fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
             let mut buffer = [0; 1024];
             loop {
                 let nbytes = cloned_socket.recv(connected_sock_id, &mut buffer).unwrap();
-                //                if nbytes == 0 {
-                //                    dbg!("closing connection");
-                //                    cloned_socket.close().unwrap();
-                //                    return;
-                //                }
+                if nbytes == 0 {
+                    dbg!("closing connection");
+                    cloned_socket.close(connected_sock_id).unwrap();
+                    return;
+                }
                 print!("> {}", str::from_utf8(&buffer[..nbytes]).unwrap());
                 cloned_socket
                     .send(connected_sock_id, &buffer[..nbytes])

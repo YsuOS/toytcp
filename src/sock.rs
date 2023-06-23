@@ -109,6 +109,30 @@ impl Sock {
     }
 
     //TODO: Rename
+    pub fn send_tcp_packet_fin(&mut self, flag: u8) -> Result<()> {
+        self.send_tcp_packet(
+            flag,
+            self.send_params.next,
+            self.recv_params.next,
+            self.recv_params.window,
+            &[],
+        )
+        .unwrap();
+        self.send_params.next += 1;
+
+        match self.status {
+            TcpStatus::Established => {
+                self.status = TcpStatus::FinWait1;
+            }
+            TcpStatus::CloseWait => {
+                self.status = TcpStatus::LastAck;
+            }
+            _ => return Ok(()),
+        }
+        Ok(())
+    }
+
+    //TODO: Rename
     pub fn send_tcp_packet_ack(&mut self, flag: u8, status: TcpStatus) {
         self.send_tcp_packet_common(flag, status);
     }

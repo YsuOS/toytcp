@@ -203,28 +203,12 @@ impl Socket {
         Ok(copy_size)
     }
 
-    //    pub fn close(&self) -> Result<()> {
-    //        let mut tcb = self.tcb.write().unwrap();
-    //        self.send_tcp_packet(
-    //            tcpflags::FIN | tcpflags::ACK,
-    //            tcb.send_params.next,
-    //            tcb.recv_params.next,
-    //            tcb.recv_params.window,
-    //            &[],
-    //        )?;
-    //        tcb.send_params.next += 1;
-    //
-    //        match tcb.status {
-    //            TcpStatus::Established => {
-    //                tcb.status = TcpStatus::FinWait1;
-    //            }
-    //            TcpStatus::CloseWait => {
-    //                tcb.status = TcpStatus::LastAck;
-    //            }
-    //            _ => return Ok(()),
-    //        }
-    //        Ok(())
-    //    }
+    pub fn close(&self, sock_id: SockId) -> Result<()> {
+        let mut table = self.socks.write().unwrap();
+        let sock = table.get_mut(&sock_id).unwrap();
+        sock.send_tcp_packet_fin(tcpflags::FIN | tcpflags::ACK)?;
+        Ok(())
+    }
 
     fn wait_tcp_packet(&self) -> Result<()> {
         let (_, mut receiver) = transport::transport_channel(
@@ -270,10 +254,12 @@ impl Socket {
                 TcpStatus::SynSent => self.synsent_handler(tcp_packet, sock)?,
                 TcpStatus::SynRcvd => self.synrcvd_handler(tcp_packet, sock_id, table)?,
                 TcpStatus::Established => self.established_handler(tcp_packet, sock)?,
-                //                TcpStatus::CloseWait | TcpStatus::LastAck => self.close_handler(tcp_packet, tcb)?,
-                //                TcpStatus::FinWait1 | TcpStatus::FinWait2 => {
-                //                    self.finwait_handler(tcp_packet, tcb)?
-                //                }
+                TcpStatus::CloseWait | TcpStatus::LastAck => {
+                    self.close_handler(tcp_packet, sock)?
+                }
+                TcpStatus::FinWait1 | TcpStatus::FinWait2 => {
+                    self.finwait_handler(tcp_packet, sock)?
+                }
                 _ => {
                     dbg!("Unsupported Status");
                     break;
@@ -361,43 +347,37 @@ impl Socket {
 
         Ok(())
     }
-    //
-    //    fn close_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
-    //        tcb.send_params.una = packet.get_ack();
-    //        Ok(())
-    //    }
-    //
-    //    fn finwait_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
-    //        if packet.get_ack() <= tcb.send_params.next && packet.get_ack() >= tcb.send_params.una {
-    //            tcb.send_params.una = packet.get_ack();
-    //            self.delete_segment_from_queue(&mut tcb)?;
-    //        } else if packet.get_ack() > tcb.send_params.next {
-    //            dbg!("received ACK is too big than expected one");
-    //        }
-    //
-    //        if !packet.payload().is_empty() {
-    //            self.process_payload(&packet, &mut tcb)?;
-    //        }
-    //
-    //        if tcb.status == TcpStatus::FinWait1 && tcb.send_params.next == tcb.send_params.una {
-    //            tcb.status = TcpStatus::FinWait2;
-    //        }
-    //
-    //        if packet.get_flag() & tcpflags::FIN > 0 {
-    //            tcb.recv_params.next += 1;
-    //            self.send_tcp_packet(
-    //                tcpflags::ACK,
-    //                tcb.send_params.next,
-    //                tcb.recv_params.next,
-    //                tcb.recv_params.window,
-    //                &[],
-    //            )?;
-    //            // Change status to TIMEWAIT. but its implementation is omitted.
-    //        }
-    //
-    //        Ok(())
-    //    }
-    //
+
+    fn close_handler(&self, packet: TcpPacket, sock: &mut Sock) -> Result<()> {
+        sock.send_params.una = packet.get_ack();
+        Ok(())
+    }
+
+    fn finwait_handler(&self, packet: TcpPacket, sock: &mut Sock) -> Result<()> {
+        if packet.get_ack() <= sock.send_params.next && packet.get_ack() >= sock.send_params.una {
+            sock.send_params.una = packet.get_ack();
+            self.delete_segment_from_queue(sock)?;
+        } else if packet.get_ack() > sock.send_params.next {
+            dbg!("received ACK is too big than expected one");
+        }
+
+        if !packet.payload().is_empty() {
+            self.process_payload(&packet, sock)?;
+        }
+
+        if sock.status == TcpStatus::FinWait1 && sock.send_params.next == sock.send_params.una {
+            sock.status = TcpStatus::FinWait2;
+        }
+
+        if packet.get_flag() & tcpflags::FIN > 0 {
+            sock.recv_params.next += 1;
+            sock.send_tcp_packet_ack(tcpflags::ACK, TcpStatus::TimeWait);
+            // Change status to TIMEWAIT. but its implementation is omitted.
+        }
+
+        Ok(())
+    }
+
     fn delete_segment_from_queue(&self, sock: &mut Sock) -> Result<()> {
         let mut queue = sock.retransmission_queue.lock().unwrap();
         while let Some(entry) = queue.pop_front() {
