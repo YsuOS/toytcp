@@ -418,60 +418,59 @@ impl Socket {
     }
 
     fn timer(&self) {
-        //        loop {
-        //            {
-        //                let mut tcb = self.tcb.write().unwrap();
-        //                let mut queue = self.retransmission_queue.lock().unwrap();
-        //                while let Some(mut entry) = queue.pop_front() {
-        //                    // Remove entry that has already gotten ACK except Established state
-        //                    if tcb.send_params.una > entry.packet.get_seq() {
-        //                        //dbg!("Successfully get acked");
-        //                        tcb.send_params.window += entry.packet.payload().len() as u16;
-        //                        if entry.packet.get_flag() & tcpflags::FIN > 0
-        //                            && tcb.status == TcpStatus::LastAck
-        //                        {
-        //                            dbg!("connection closed");
-        //                        }
-        //                        continue;
-        //                    }
-        //
-        //                    if entry.latest_transmission_time.elapsed().unwrap()
-        //                        < Duration::from_secs(RETRANSMITTION_TIMEOUT)
-        //                    {
-        //                        queue.push_front(entry);
-        //                        break;
-        //                    }
-        //
-        //                    if entry.transmission_count < MAX_TRANSMITTION {
-        //                        let (mut sender, _) = transport::transport_channel(
-        //                            MAX_PACKET_SIZE,
-        //                            TransportChannelType::Layer4(TransportProtocol::Ipv4(
-        //                                IpNextHeaderProtocols::Tcp,
-        //                            )),
-        //                        )
-        //                        .unwrap();
-        //                        let sock_id = self.sock_id.read().unwrap();
-        //                        dbg!("Retransmission");
-        //                        sender
-        //                            .send_to(entry.packet.clone(), IpAddr::V4(sock_id.remote_addr))
-        //                            .unwrap();
-        //                        entry.transmission_count += 1;
-        //                        entry.latest_transmission_time = SystemTime::now();
-        //                        queue.push_back(entry);
-        //                    } else {
-        //                        dbg!("reached MAX_TRANSMISSION");
-        //                        if entry.packet.get_flag() & tcpflags::FIN > 0
-        //                            && (tcb.status == TcpStatus::LastAck
-        //                                || tcb.status == TcpStatus::FinWait1
-        //                                || tcb.status == TcpStatus::FinWait2)
-        //                        {
-        //                            dbg!("connection closed");
-        //                        }
-        //                    }
-        //                }
-        //            }
-        //            thread::sleep(Duration::from_millis(100));
-        //        }
+        loop {
+            let mut table = self.socks.write().unwrap();
+            for (sock_id, sock) in table.iter_mut() {
+                let mut queue = sock.retransmission_queue.lock().unwrap();
+                while let Some(mut entry) = queue.pop_front() {
+                    // Remove entry that has already gotten ACK except Established state
+                    if sock.send_params.una > entry.packet.get_seq() {
+                        sock.send_params.window += entry.packet.payload().len() as u16;
+                        if entry.packet.get_flag() & tcpflags::FIN > 0
+                            && sock.status == TcpStatus::LastAck
+                        {
+                            dbg!("connection closed");
+                        }
+                        continue;
+                    }
+
+                    if entry.latest_transmission_time.elapsed().unwrap()
+                        < Duration::from_secs(RETRANSMITTION_TIMEOUT)
+                    {
+                        queue.push_front(entry);
+                        break;
+                    }
+
+                    if entry.transmission_count < MAX_TRANSMITTION {
+                        let (mut sender, _) = transport::transport_channel(
+                            MAX_PACKET_SIZE,
+                            TransportChannelType::Layer4(TransportProtocol::Ipv4(
+                                IpNextHeaderProtocols::Tcp,
+                            )),
+                        )
+                        .unwrap();
+                        dbg!("Retransmission");
+                        sender
+                            .send_to(entry.packet.clone(), IpAddr::V4(sock_id.remote_addr))
+                            .unwrap();
+                        entry.transmission_count += 1;
+                        entry.latest_transmission_time = SystemTime::now();
+                        queue.push_back(entry);
+                    } else {
+                        dbg!("reached MAX_TRANSMISSION");
+                        if entry.packet.get_flag() & tcpflags::FIN > 0
+                            && (sock.status == TcpStatus::LastAck
+                                || sock.status == TcpStatus::FinWait1
+                                || sock.status == TcpStatus::FinWait2)
+                        {
+                            dbg!("connection closed");
+                        }
+                    }
+                }
+            }
+            drop(table);
+            thread::sleep(Duration::from_millis(100));
+        }
     }
 
     fn wait_state(&self, wait_state: SocketState) {
