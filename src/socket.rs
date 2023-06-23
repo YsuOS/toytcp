@@ -78,11 +78,11 @@ impl Socket {
         thread::spawn(move || {
             cloned_socket.wait_tcp_packet().unwrap();
         });
-        //
-        //        let cloned_socket = socket.clone();
-        //        thread::spawn(move || {
-        //            cloned_socket.timer();
-        //        });
+
+        let cloned_socket = socket.clone();
+        thread::spawn(move || {
+            cloned_socket.timer();
+        });
 
         socket
     }
@@ -138,43 +138,40 @@ impl Socket {
         }
     }
 
-    //    pub fn send(&self, buf: &[u8]) -> Result<()> {
-    //        let mut cursor = 0;
-    //        while cursor < buf.len() {
-    //            let mut send_size = {
-    //                let tcb = self.tcb.read().unwrap();
-    //                cmp::min(
-    //                    MSS,
-    //                    cmp::min(tcb.send_params.window as usize, buf.len() - cursor),
-    //                )
-    //            };
-    //
-    //            while send_size == 0 {
-    //                send_size = {
-    //                    let tcb = self.tcb.read().unwrap();
-    //                    cmp::min(
-    //                        MSS,
-    //                        cmp::min(tcb.send_params.window as usize, buf.len() - cursor),
-    //                    )
-    //                };
-    //            }
-    //
-    //            let mut tcb = self.tcb.write().unwrap();
-    //            self.send_tcp_packet(
-    //                tcpflags::ACK,
-    //                tcb.send_params.next,
-    //                tcb.recv_params.next,
-    //                tcb.recv_params.window,
-    //                &buf[cursor..cursor + send_size],
-    //            )?;
-    //            cursor += send_size;
-    //            tcb.send_params.next += send_size as u32;
-    //            tcb.send_params.window -= send_size as u16;
-    //            //dbg!(tcb.send_params.window, send_size);
-    //            thread::sleep(Duration::from_millis(1));
-    //        }
-    //        Ok(())
-    //    }
+    pub fn send(&self, sock_id: SockId, buf: &[u8]) -> Result<()> {
+        let mut cursor = 0;
+        while cursor < buf.len() {
+            let mut send_size = {
+                let table = self.socks.write().unwrap();
+                let sock = table.get(&sock_id).unwrap();
+                cmp::min(
+                    MSS,
+                    cmp::min(sock.send_params.window as usize, buf.len() - cursor),
+                )
+            };
+
+            while send_size == 0 {
+                send_size = {
+                    let table = self.socks.read().unwrap();
+                    let sock = table.get(&sock_id).unwrap();
+                    cmp::min(
+                        MSS,
+                        cmp::min(sock.send_params.window as usize, buf.len() - cursor),
+                    )
+                };
+            }
+
+            let mut table = self.socks.write().unwrap();
+            let sock = table.get_mut(&sock_id).unwrap();
+            sock.send_tcp_packet_send(
+                tcpflags::ACK,
+                &buf[cursor..cursor + send_size],
+            );
+            cursor += send_size;
+            thread::sleep(Duration::from_millis(1));
+        }
+        Ok(())
+    }
     //
     //    pub fn recv(&self, buf: &mut [u8]) -> Result<usize> {
     //        let mut received_size = {

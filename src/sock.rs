@@ -114,6 +114,20 @@ impl Sock {
     }
 
     //TODO: Rename
+    pub fn send_tcp_packet_send(&mut self, flag: u8, payload: &[u8]) {
+        self.send_tcp_packet(
+            flag,
+            self.send_params.next,
+            self.recv_params.next,
+            self.recv_params.window,
+            payload,
+        )
+        .unwrap();
+        self.send_params.next += payload.len() as u32;
+        self.send_params.window -= payload.len() as u16;
+    }
+
+    //TODO: Rename
     fn send_tcp_packet_common(&mut self, flag: u8, status: TcpStatus) {
         self.send_tcp_packet(
             flag,
