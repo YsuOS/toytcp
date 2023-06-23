@@ -119,8 +119,7 @@ impl Socket {
         self.insert_sock(sock_id, sock);
         dbg!("listen socket", &sock_id);
 
-        // FIXME: use Unconnected
-        self.set_state(SocketState::Connecting);
+        self.set_state(SocketState::Unconnected);
 
         Ok(())
     }
@@ -163,46 +162,47 @@ impl Socket {
 
             let mut table = self.socks.write().unwrap();
             let sock = table.get_mut(&sock_id).unwrap();
-            sock.send_tcp_packet_send(
-                tcpflags::ACK,
-                &buf[cursor..cursor + send_size],
-            );
+            sock.send_tcp_packet_send(tcpflags::ACK, &buf[cursor..cursor + send_size]);
             cursor += send_size;
             thread::sleep(Duration::from_millis(1));
         }
         Ok(())
     }
-    //
-    //    pub fn recv(&self, buf: &mut [u8]) -> Result<usize> {
-    //        let mut received_size = {
-    //            let tcb = self.tcb.read().unwrap();
-    //            tcb.recv_buffer.len() - tcb.recv_params.window as usize
-    //        };
-    //
-    //        while received_size == 0 {
-    //            {
-    //                let tcb = self.tcb.read().unwrap();
-    //                match tcb.status {
-    //                    TcpStatus::CloseWait | TcpStatus::LastAck | TcpStatus::TimeWait => break,
-    //                    _ => {}
-    //                }
-    //            }
-    //
-    //            received_size = {
-    //                let tcb = self.tcb.read().unwrap();
-    //                tcb.recv_buffer.len() - tcb.recv_params.window as usize
-    //            };
-    //        }
-    //
-    //        let copy_size = cmp::min(buf.len(), received_size);
-    //        let mut tcb = self.tcb.write().unwrap();
-    //        buf[..copy_size].copy_from_slice(&tcb.recv_buffer[..copy_size]);
-    //        tcb.recv_buffer.copy_within(copy_size.., 0);
-    //        tcb.recv_params.window += copy_size as u16;
-    //
-    //        Ok(copy_size)
-    //    }
-    //
+
+    pub fn recv(&self, sock_id: SockId, buf: &mut [u8]) -> Result<usize> {
+        let mut received_size = {
+            let table = self.socks.read().unwrap();
+            let sock = table.get(&sock_id).unwrap();
+            sock.recv_buffer.len() - sock.recv_params.window as usize
+        };
+
+        while received_size == 0 {
+            {
+                let table = self.socks.read().unwrap();
+                let sock = table.get(&sock_id).unwrap();
+                match sock.status {
+                    TcpStatus::CloseWait | TcpStatus::LastAck | TcpStatus::TimeWait => break,
+                    _ => {}
+                }
+            }
+
+            received_size = {
+                let table = self.socks.read().unwrap();
+                let sock = table.get(&sock_id).unwrap();
+                sock.recv_buffer.len() - sock.recv_params.window as usize
+            };
+        }
+
+        let copy_size = cmp::min(buf.len(), received_size);
+        let mut table = self.socks.write().unwrap();
+        let sock = table.get_mut(&sock_id).unwrap();
+        buf[..copy_size].copy_from_slice(&sock.recv_buffer[..copy_size]);
+        sock.recv_buffer.copy_within(copy_size.., 0);
+        sock.recv_params.window += copy_size as u16;
+
+        Ok(copy_size)
+    }
+
     //    pub fn close(&self) -> Result<()> {
     //        let mut tcb = self.tcb.write().unwrap();
     //        self.send_tcp_packet(
@@ -248,8 +248,6 @@ impl Socket {
             let sock_id = SockId::new(local_addr, local_port, remote_addr, remote_port).unwrap();
             dbg!(&sock_id);
 
-            self.wait_state(SocketState::Connecting);
-
             let mut table = self.socks.write().unwrap();
             let sock = match table.get_mut(&sock_id) {
                 Some(sock) => sock,
@@ -263,7 +261,6 @@ impl Socket {
                     None => todo!("unknown sock_id"),
                 },
             };
-            dbg!(&sock.status);
 
             let sock_id = sock.sock_id;
             match sock.status {
@@ -272,7 +269,7 @@ impl Socket {
                 }
                 TcpStatus::SynSent => self.synsent_handler(tcp_packet, sock)?,
                 TcpStatus::SynRcvd => self.synrcvd_handler(tcp_packet, sock_id, table)?,
-                //                TcpStatus::Established => self.established_handler(tcp_packet, tcb)?,
+                TcpStatus::Established => self.established_handler(tcp_packet, sock)?,
                 //                TcpStatus::CloseWait | TcpStatus::LastAck => self.close_handler(tcp_packet, tcb)?,
                 //                TcpStatus::FinWait1 | TcpStatus::FinWait2 => {
                 //                    self.finwait_handler(tcp_packet, tcb)?
@@ -344,33 +341,26 @@ impl Socket {
         self.set_state(SocketState::Connected);
         Ok(())
     }
-    //
-    //    fn established_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
-    //        if packet.get_ack() <= tcb.send_params.next && packet.get_ack() >= tcb.send_params.una {
-    //            tcb.send_params.una = packet.get_ack();
-    //            self.delete_segment_from_queue(&mut tcb)?;
-    //        } else if packet.get_ack() > tcb.send_params.next {
-    //            dbg!("received ACK is too big than expected one");
-    //        }
-    //
-    //        if !packet.payload().is_empty() {
-    //            self.process_payload(&packet, &mut tcb)?;
-    //        }
-    //
-    //        if packet.get_flag() & tcpflags::FIN > 0 {
-    //            tcb.recv_params.next = packet.get_seq() + 1;
-    //            self.send_tcp_packet(
-    //                tcpflags::ACK,
-    //                tcb.send_params.next,
-    //                tcb.recv_params.next,
-    //                tcb.recv_params.window,
-    //                &[],
-    //            )?;
-    //            tcb.status = TcpStatus::CloseWait;
-    //        }
-    //
-    //        Ok(())
-    //    }
+
+    fn established_handler(&self, packet: TcpPacket, sock: &mut Sock) -> Result<()> {
+        if packet.get_ack() <= sock.send_params.next && packet.get_ack() >= sock.send_params.una {
+            sock.send_params.una = packet.get_ack();
+            self.delete_segment_from_queue(sock)?;
+        } else if packet.get_ack() > sock.send_params.next {
+            dbg!("received ACK is too big than expected one");
+        }
+
+        if !packet.payload().is_empty() {
+            self.process_payload(&packet, sock)?;
+        }
+
+        if packet.get_flag() & tcpflags::FIN > 0 {
+            sock.recv_params.next = packet.get_seq() + 1;
+            sock.send_tcp_packet_ack(tcpflags::ACK, TcpStatus::CloseWait);
+        }
+
+        Ok(())
+    }
     //
     //    fn close_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
     //        tcb.send_params.una = packet.get_ack();
@@ -408,50 +398,44 @@ impl Socket {
     //        Ok(())
     //    }
     //
-    //    //    fn delete_segment_from_queue(&self, tcb: &mut RwLockWriteGuard<Tcb>) -> Result<()> {
-    //    //        let mut queue = self.retransmission_queue.lock().unwrap();
-    //    //        while let Some(entry) = queue.pop_front() {
-    //    //            if entry.packet.get_ack() < tcb.send_params.una {
-    //    //                //dbg!("Successfully get acked");
-    //    //                //dbg!(tcb.send_params.window);
-    //    //                tcb.send_params.window += entry.packet.payload().len() as u16;
-    //    //            } else {
-    //    //                // the entry's packet has not ACKed. return to the queue
-    //    //                queue.push_front(entry);
-    //    //                break;
-    //    //            }
-    //    //        }
-    //    //        Ok(())
-    //    //    }
-    //
-    //    fn process_payload(&self, packet: &TcpPacket, tcb: &mut RwLockWriteGuard<Tcb>) -> Result<()> {
-    //        let offset = tcb.recv_buffer.len() - tcb.recv_params.window as usize
-    //            + (packet.get_seq() - tcb.recv_params.next) as usize;
-    //        let copy_size = cmp::min(packet.payload().len(), tcb.recv_buffer.len() - offset);
-    //
-    //        tcb.recv_buffer[offset..offset + copy_size].copy_from_slice(&packet.payload()[..copy_size]);
-    //
-    //        tcb.recv_params.tail = cmp::max(tcb.recv_params.tail, packet.get_seq() + copy_size as u32);
-    //
-    //        if packet.get_seq() == tcb.recv_params.next {
-    //            tcb.recv_params.next = tcb.recv_params.tail;
-    //            tcb.recv_params.window -= (tcb.recv_params.tail - packet.get_seq()) as u16;
-    //        }
-    //
-    //        if copy_size > 0 {
-    //            self.send_tcp_packet(
-    //                tcpflags::ACK,
-    //                tcb.send_params.next,
-    //                tcb.recv_params.next,
-    //                tcb.recv_params.window,
-    //                &[],
-    //            )?;
-    //        } else {
-    //            dbg!("recv buffer overflow");
-    //        }
-    //
-    //        Ok(())
-    //    }
+    fn delete_segment_from_queue(&self, sock: &mut Sock) -> Result<()> {
+        let mut queue = sock.retransmission_queue.lock().unwrap();
+        while let Some(entry) = queue.pop_front() {
+            if entry.packet.get_ack() < sock.send_params.una {
+                sock.send_params.window += entry.packet.payload().len() as u16;
+            } else {
+                // the entry's packet has not ACKed. return to the queue
+                queue.push_front(entry);
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn process_payload(&self, packet: &TcpPacket, sock: &mut Sock) -> Result<()> {
+        let offset = sock.recv_buffer.len() - sock.recv_params.window as usize
+            + (packet.get_seq() - sock.recv_params.next) as usize;
+        let copy_size = cmp::min(packet.payload().len(), sock.recv_buffer.len() - offset);
+
+        sock.recv_buffer[offset..offset + copy_size]
+            .copy_from_slice(&packet.payload()[..copy_size]);
+
+        sock.recv_params.tail =
+            cmp::max(sock.recv_params.tail, packet.get_seq() + copy_size as u32);
+
+        if packet.get_seq() == sock.recv_params.next {
+            sock.recv_params.next = sock.recv_params.tail;
+            sock.recv_params.window -= (sock.recv_params.tail - packet.get_seq()) as u16;
+        }
+
+        if copy_size > 0 {
+            sock.send_tcp_packet_ack(tcpflags::ACK, TcpStatus::Established);
+        } else {
+            dbg!("recv buffer overflow");
+        }
+
+        Ok(())
+    }
 
     fn timer(&self) {
         //        loop {

@@ -30,9 +30,9 @@ fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
         //    socket.send(input.repeat(2000).as_bytes())?;
         //}
 
-        //let mut buffer = vec![0; 1500];
-        //let n = socket.recv(&mut buffer)?;
-        //print!("> {}", str::from_utf8(&buffer[..n])?);
+        let mut buffer = vec![0; 1500];
+        let n = socket.recv(sock_id, &mut buffer)?;
+        print!("> {}", str::from_utf8(&buffer[..n])?);
     }
     //Ok(())
 }
