@@ -244,7 +244,7 @@ impl Socket {
                     remote_port: UNDETERMINED_PORT,
                 }) {
                     Some(sock) => sock,
-                    None => todo!("unknown sock_id"),
+                    None => continue,
                 },
             };
 
