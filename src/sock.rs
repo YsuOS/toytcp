@@ -1,14 +1,11 @@
-use crate::packet::TcpPacket;
-use crate::socket::SockId;
-use crate::tcpflags;
+use crate::{packet::TcpPacket, socket::SockId, tcpflags};
 use anyhow::{Ok, Result};
-use pnet::packet::ip::IpNextHeaderProtocols;
-use pnet::transport::{self, TransportChannelType, TransportProtocol};
+use pnet::{
+    packet::ip::IpNextHeaderProtocols,
+    transport::{self, TransportChannelType, TransportProtocol},
+};
 use rand::random;
-use std::collections::VecDeque;
-use std::net::IpAddr;
-use std::sync::Mutex;
-use std::time::SystemTime;
+use std::{collections::VecDeque, net::IpAddr, sync::Mutex, time::SystemTime};
 
 // How much data can be buffered on the socket
 const SOCKET_BUFFER_SIZE: usize = 4380;

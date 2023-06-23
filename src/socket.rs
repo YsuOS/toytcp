@@ -1,20 +1,22 @@
-use crate::packet::TcpPacket;
-use crate::sock::{Sock, TcpStatus};
-use crate::tcpflags;
+use crate::{
+    packet::TcpPacket,
+    sock::{Sock, TcpStatus},
+    tcpflags,
+};
 use anyhow::{Ok, Result};
-use pnet::packet::ip::IpNextHeaderProtocols;
-use pnet::packet::Packet;
-use pnet::transport::{self, TransportChannelType, TransportProtocol};
+use pnet::{
+    packet::{ip::IpNextHeaderProtocols, Packet},
+    transport::{self, TransportChannelType, TransportProtocol},
+};
 use rand::Rng;
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Condvar, Mutex, RwLockWriteGuard};
-use std::time::{Duration, SystemTime};
 use std::{
     cmp,
+    collections::{HashMap, VecDeque},
     net::{IpAddr, Ipv4Addr},
     ops::Range,
-    sync::{Arc, RwLock},
+    sync::{Arc, Condvar, Mutex, RwLock, RwLockWriteGuard},
     thread,
+    time::{Duration, SystemTime},
 };
 
 const UNDETERMINED_ADDR: Ipv4Addr = Ipv4Addr::new(0, 0, 0, 0);

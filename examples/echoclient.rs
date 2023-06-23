@@ -14,12 +14,12 @@ fn echo_client(remote_addr: Ipv4Addr, remote_port: u16) -> Result<()> {
     let sock_id = socket.connect(remote_addr, remote_port)?;
     dbg!(sock_id);
 
-        let cloned_socket = socket.clone();
-        ctrlc::set_handler(move || {
-            cloned_socket.close(sock_id).unwrap();
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            std::process::exit(0);
-        })?;
+    let cloned_socket = socket.clone();
+    ctrlc::set_handler(move || {
+        cloned_socket.close(sock_id).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::process::exit(0);
+    })?;
     loop {
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
