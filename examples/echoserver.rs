@@ -11,11 +11,11 @@ fn main() -> Result<()> {
 
 fn echo_server(local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
     let socket = Socket::new();
-    //socket.listen(local_addr, local_port)?;
-    //let sock_id = SockId::listen(local_addr, local_port)?;
+    socket.listen(local_addr, local_port)?;
     loop {
+        let connected_sock_id = socket.accept()?;
+        dbg!(&connected_sock_id);
         //let cloned_socket = socket.clone();
-        //cloned_socket.accept()?;
         //        std::thread::sleep(std::time::Duration::from_secs(100));
         //        let cloned_sock_id = sock_id.clone();
         //        let connected_socket = Socket::accept(cloned_sock_id)?;

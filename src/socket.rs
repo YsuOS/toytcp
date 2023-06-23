@@ -6,8 +6,8 @@ use pnet::packet::ip::IpNextHeaderProtocols;
 use pnet::packet::Packet;
 use pnet::transport::{self, TransportChannelType, TransportProtocol};
 use rand::Rng;
-use std::collections::HashMap;
-use std::sync::{Condvar, Mutex};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Condvar, Mutex, RwLockWriteGuard};
 use std::time::{Duration, SystemTime};
 use std::{
     cmp,
@@ -32,10 +32,12 @@ const PORT_RANGE: Range<u16> = 40000..60000;
 pub struct Socket {
     socks: RwLock<HashMap<SockId, Sock>>,
     socket_state: (Mutex<SocketState>, Condvar),
+    backlog: Mutex<VecDeque<SockId>>,
 }
 
 #[derive(Debug, PartialEq)]
 enum SocketState {
+    Free,
     Unconnected,
     Connecting,
     Connected,
@@ -69,7 +71,8 @@ impl Socket {
     pub fn new() -> Arc<Self> {
         let socket = Arc::new(Self {
             socks: RwLock::new(HashMap::new()),
-            socket_state: (Mutex::new(SocketState::Unconnected), Condvar::new()),
+            socket_state: (Mutex::new(SocketState::Free), Condvar::new()),
+            backlog: Mutex::new(VecDeque::new()),
         });
         let cloned_socket = socket.clone();
         thread::spawn(move || {
@@ -104,32 +107,37 @@ impl Socket {
         Ok(sock_id)
     }
 
-    //    pub fn listen(&self, local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
-    //        let remote_addr = UNDETERMINED_ADDR;
-    //        let remote_port = UNDETERMINED_PORT;
-    //
-    //        //self.set_sockid(local_addr, local_port, remote_addr, remote_port);
-    //
-    //        //        self.set_status(TcpStatus::Listen);
-    //        Ok(())
-    //    }
+    pub fn listen(&self, local_addr: Ipv4Addr, local_port: u16) -> Result<()> {
+        let remote_addr = UNDETERMINED_ADDR;
+        let remote_port = UNDETERMINED_PORT;
 
-    //    fn set_status(&self, status: TcpStatus) {
-    //        let mut tcb = self.tcb.write().unwrap();
-    //        tcb.status = status;
-    //    }
+        let sock_id = SockId::new(local_addr, local_port, remote_addr, remote_port)?;
+        let mut sock = Sock::new(sock_id).unwrap();
 
-    //   fn get_local(&self) -> Result<(Ipv4Addr, u16)> {
-    //       let sock_id = self.sock_id.read().unwrap();
-    //       Ok((sock_id.local_addr, sock_id.local_port))
-    //   }
+        sock.status = TcpStatus::Listen;
 
-    //    pub fn accept(&self) -> Result<()> {
-    //        self.wait_tcp_status(TcpStatus::Established);
-    //        //dbg!("Accepted");
-    //        Ok(())
-    //    }
-    //
+        self.insert_sock(sock_id, sock);
+        dbg!("listen socket", &sock_id);
+
+        // FIXME: use Unconnected
+        self.set_state(SocketState::Connecting);
+
+        Ok(())
+    }
+
+    pub fn accept(&self) -> Result<SockId> {
+        self.wait_state(SocketState::Connected);
+        loop {
+            match self.pop_front_backlog() {
+                Some(sock_id) => {
+                    dbg!("Accepted");
+                    return Ok(sock_id);
+                }
+                None => continue,
+            };
+        }
+    }
+
     //    pub fn send(&self, buf: &[u8]) -> Result<()> {
     //        let mut cursor = 0;
     //        while cursor < buf.len() {
@@ -246,14 +254,27 @@ impl Socket {
             self.wait_state(SocketState::Connecting);
 
             let mut table = self.socks.write().unwrap();
-            let sock = table.get_mut(&sock_id).unwrap();
+            let sock = match table.get_mut(&sock_id) {
+                Some(sock) => sock,
+                None => match table.get_mut(&SockId {
+                    local_addr,
+                    remote_addr: UNDETERMINED_ADDR,
+                    local_port,
+                    remote_port: UNDETERMINED_PORT,
+                }) {
+                    Some(sock) => sock,
+                    None => todo!("unknown sock_id"),
+                },
+            };
+            dbg!(&sock.status);
 
+            let sock_id = sock.sock_id;
             match sock.status {
-                //                TcpStatus::Listen => self.listen_handler(tcp_packet, tcb, remote_addr)?,
-                TcpStatus::SynSent => {
-                    self.synsent_handler(tcp_packet, sock)?;
+                TcpStatus::Listen => {
+                    self.listen_handler(tcp_packet, sock_id, remote_addr, table)?
                 }
-                //                TcpStatus::SynRcvd => self.synrcvd_handler(tcp_packet, tcb)?,
+                TcpStatus::SynSent => self.synsent_handler(tcp_packet, sock)?,
+                TcpStatus::SynRcvd => self.synrcvd_handler(tcp_packet, sock_id, table)?,
                 //                TcpStatus::Established => self.established_handler(tcp_packet, tcb)?,
                 //                TcpStatus::CloseWait | TcpStatus::LastAck => self.close_handler(tcp_packet, tcb)?,
                 //                TcpStatus::FinWait1 | TcpStatus::FinWait2 => {
@@ -268,23 +289,32 @@ impl Socket {
         Ok(())
     }
 
-    //    fn listen_handler(
-    //        &self,
-    //        packet: TcpPacket,
-    //        mut tcb: RwLockWriteGuard<Tcb>,
-    //        remote_addr: Ipv4Addr,
-    //    ) -> Result<()> {
-    //        let (local_addr, local_port) = self.get_local().unwrap();
-    //        let remote_port = packet.get_src();
-    //        self.set_sockid(local_addr, local_port, remote_addr, remote_port);
-    //
-    //        tcb.recv_params.next = packet.get_seq() + 1;
-    //        //        self.init_seq(&mut tcb);
-    //
-    //        self.send_tcp_packet_tcb(tcpflags::SYN | tcpflags::ACK, TcpStatus::SynRcvd, &mut tcb);
-    //
-    //        Ok(())
-    //    }
+    fn listen_handler(
+        &self,
+        packet: TcpPacket,
+        listen_sock_id: SockId,
+        remote_addr: Ipv4Addr,
+        mut table: RwLockWriteGuard<HashMap<SockId, Sock>>,
+    ) -> Result<()> {
+        let local_addr = listen_sock_id.local_addr;
+        let local_port = listen_sock_id.local_port;
+        let remote_port = packet.get_src();
+
+        let conn_sock_id = SockId::new(local_addr, local_port, remote_addr, remote_port)?;
+        let mut conn_sock = Sock::new(conn_sock_id).unwrap();
+        conn_sock.status = TcpStatus::Listen;
+        conn_sock.init_seq()?;
+        conn_sock.recv_params.next = packet.get_seq() + 1;
+        conn_sock.send_params.window = packet.get_window_size();
+
+        conn_sock.send_tcp_packet_syn(tcpflags::SYN | tcpflags::ACK, TcpStatus::SynRcvd);
+
+        table.insert(conn_sock_id, conn_sock);
+
+        dbg!("Sent SYN|ACK");
+
+        Ok(())
+    }
 
     fn synsent_handler(&self, packet: TcpPacket, sock: &mut Sock) -> Result<()> {
         dbg!("Received SYN|ACK");
@@ -298,15 +328,25 @@ impl Socket {
         }
 
         sock.send_tcp_packet_ack(tcpflags::ACK, TcpStatus::Established);
+        self.set_state(SocketState::Connected);
         dbg!("Sent ACK");
         Ok(())
     }
 
-    //    fn synrcvd_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
-    //        tcb.send_params.una = packet.get_ack();
-    //        tcb.status = TcpStatus::Established;
-    //        Ok(())
-    //    }
+    fn synrcvd_handler(
+        &self,
+        packet: TcpPacket,
+        conn_sock_id: SockId,
+        mut table: RwLockWriteGuard<HashMap<SockId, Sock>>,
+    ) -> Result<()> {
+        let mut sock = table.get_mut(&conn_sock_id).unwrap();
+        sock.send_params.una = packet.get_ack();
+        sock.status = TcpStatus::Established;
+
+        self.push_backlog(conn_sock_id);
+        self.set_state(SocketState::Connected);
+        Ok(())
+    }
     //
     //    fn established_handler(&self, packet: TcpPacket, mut tcb: RwLockWriteGuard<Tcb>) -> Result<()> {
     //        if packet.get_ack() <= tcb.send_params.next && packet.get_ack() >= tcb.send_params.una {
@@ -491,6 +531,16 @@ impl Socket {
     fn insert_sock(&self, sock_id: SockId, sock: Sock) {
         let mut table = self.socks.write().unwrap();
         table.insert(sock_id, sock);
+    }
+
+    fn push_backlog(&self, sock_id: SockId) {
+        let mut backlog = self.backlog.lock().unwrap();
+        backlog.push_back(sock_id);
+    }
+
+    fn pop_front_backlog(&self) -> Option<SockId> {
+        let mut backlog = self.backlog.lock().unwrap();
+        backlog.pop_front()
     }
 }
 
