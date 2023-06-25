@@ -117,15 +117,6 @@ impl Sock {
         .unwrap();
         self.send_params.next += 1;
 
-        match self.status {
-            TcpStatus::Established => {
-                self.status = TcpStatus::FinWait1;
-            }
-            TcpStatus::CloseWait => {
-                self.status = TcpStatus::LastAck;
-            }
-            _ => return Ok(()),
-        }
         Ok(())
     }
 

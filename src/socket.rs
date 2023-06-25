@@ -209,6 +209,27 @@ impl Socket {
         let mut table = self.socks.write().unwrap();
         let sock = table.get_mut(&sock_id).unwrap();
         sock.send_tcp_packet_fin(tcpflags::FIN | tcpflags::ACK)?;
+
+        match sock.status {
+            TcpStatus::Established => {
+                sock.status = TcpStatus::FinWait1;
+                drop(table);
+                self.wait_state(SocketState::Free);
+                let mut table = self.socks.write().unwrap();
+                table.remove(&sock_id);
+                dbg!("connection closed & removed", sock_id);
+            }
+            TcpStatus::CloseWait => {
+                sock.status = TcpStatus::LastAck;
+                drop(table);
+                self.wait_state(SocketState::Free);
+                let mut table = self.socks.write().unwrap();
+                table.remove(&sock_id);
+                dbg!("connection closed & removed", sock_id);
+            }
+            _ => return Ok(()),
+        }
+
         Ok(())
     }
 
@@ -251,6 +272,7 @@ impl Socket {
             let sock_id = sock.sock_id;
             match sock.status {
                 TcpStatus::Listen => {
+                    self.set_state(SocketState::Connecting);
                     self.listen_handler(tcp_packet, sock_id, remote_addr, table)?
                 }
                 TcpStatus::SynSent => self.synsent_handler(tcp_packet, sock)?,
@@ -374,7 +396,9 @@ impl Socket {
         if packet.get_flag() & tcpflags::FIN > 0 {
             sock.recv_params.next += 1;
             sock.send_tcp_packet_ack(tcpflags::ACK, TcpStatus::TimeWait);
-            // Change status to TIMEWAIT. but its implementation is omitted.
+            // TODO: not implemented TimeWait state. The socket closes immediately after sending
+            // ack
+            self.set_state(SocketState::Free);
         }
 
         Ok(())
@@ -431,6 +455,7 @@ impl Socket {
                         if entry.packet.get_flag() & tcpflags::FIN > 0
                             && sock.status == TcpStatus::LastAck
                         {
+                            self.set_state(SocketState::Free);
                             dbg!("connection closed");
                         }
                         continue;
@@ -465,6 +490,7 @@ impl Socket {
                                 || sock.status == TcpStatus::FinWait1
                                 || sock.status == TcpStatus::FinWait2)
                         {
+                            self.set_state(SocketState::Free);
                             dbg!("connection closed");
                         }
                     }
