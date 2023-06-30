@@ -164,7 +164,7 @@ impl Socket {
 
             let mut table = self.socks.write().unwrap();
             let sock = table.get_mut(&sock_id).unwrap();
-            sock.send_tcp_packet_send(tcpflags::ACK, &buf[cursor..cursor + send_size]);
+            sock.send_tcp_packet_send(&buf[cursor..cursor + send_size]);
             cursor += send_size;
             thread::sleep(Duration::from_millis(1));
         }
@@ -208,7 +208,7 @@ impl Socket {
     pub fn close(&self, sock_id: SockId) -> Result<()> {
         let mut table = self.socks.write().unwrap();
         let sock = table.get_mut(&sock_id).unwrap();
-        sock.send_tcp_packet_fin(tcpflags::FIN | tcpflags::ACK)?;
+        sock.send_tcp_packet_fin()?;
 
         match sock.status {
             TcpStatus::Established => {
@@ -331,7 +331,7 @@ impl Socket {
             dbg!("SND.NXT don't match SND.UNA!");
         }
 
-        sock.send_tcp_packet_ack(tcpflags::ACK, TcpStatus::Established);
+        sock.send_tcp_packet_ack(TcpStatus::Established);
         self.set_state(SocketState::Connected);
         dbg!("Sent ACK");
         Ok(())
@@ -366,7 +366,7 @@ impl Socket {
 
         if packet.get_flag() & tcpflags::FIN > 0 {
             sock.recv_params.next = packet.get_seq() + 1;
-            sock.send_tcp_packet_ack(tcpflags::ACK, TcpStatus::CloseWait);
+            sock.send_tcp_packet_ack(TcpStatus::CloseWait);
         }
 
         Ok(())
@@ -395,7 +395,7 @@ impl Socket {
 
         if packet.get_flag() & tcpflags::FIN > 0 {
             sock.recv_params.next += 1;
-            sock.send_tcp_packet_ack(tcpflags::ACK, TcpStatus::TimeWait);
+            sock.send_tcp_packet_ack(TcpStatus::TimeWait);
             // TODO: not implemented TimeWait state. The socket closes immediately after sending
             // ack
             self.set_state(SocketState::Free);
@@ -435,7 +435,7 @@ impl Socket {
         }
 
         if copy_size > 0 {
-            sock.send_tcp_packet_ack(tcpflags::ACK, TcpStatus::Established);
+            sock.send_tcp_packet_ack(TcpStatus::Established);
         } else {
             dbg!("recv buffer overflow");
         }

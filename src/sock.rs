@@ -68,12 +68,12 @@ impl Sock {
     fn send_tcp_packet(
         &self,
         flag: u8,
-        seq: u32,
-        ack: u32,
-        win: u16,
         payload: &[u8],
     ) -> Result<()> {
         let mut packet = TcpPacket::new(payload.len());
+        let seq = self.send_params.next;
+        let ack = self.recv_params.next;
+        let win = self.recv_params.window;
         packet.set_src(self.sock_id.local_port);
         packet.set_dst(self.sock_id.remote_port);
         packet.set_flag(flag);
@@ -99,56 +99,30 @@ impl Sock {
         Ok(())
     }
 
-    //TODO: Rename
     pub fn send_tcp_packet_syn(&mut self, flag: u8, status: TcpStatus) {
-        self.send_tcp_packet_common(flag, status);
+        self.send_tcp_packet(flag, &[]).unwrap();
         self.send_params.next += 1;
+        self.set_status(status);
     }
 
-    //TODO: Rename
-    pub fn send_tcp_packet_fin(&mut self, flag: u8) -> Result<()> {
-        self.send_tcp_packet(
-            flag,
-            self.send_params.next,
-            self.recv_params.next,
-            self.recv_params.window,
-            &[],
-        )
-        .unwrap();
+    pub fn send_tcp_packet_fin(&mut self) -> Result<()> {
+        self.send_tcp_packet(tcpflags::FIN | tcpflags::ACK, &[]).unwrap();
         self.send_params.next += 1;
-
         Ok(())
     }
 
-    //TODO: Rename
-    pub fn send_tcp_packet_ack(&mut self, flag: u8, status: TcpStatus) {
-        self.send_tcp_packet_common(flag, status);
-    }
-
-    //TODO: Rename
-    pub fn send_tcp_packet_send(&mut self, flag: u8, payload: &[u8]) {
-        self.send_tcp_packet(
-            flag,
-            self.send_params.next,
-            self.recv_params.next,
-            self.recv_params.window,
-            payload,
-        )
-        .unwrap();
+    pub fn send_tcp_packet_send(&mut self, payload: &[u8]) {
+        self.send_tcp_packet(tcpflags::ACK, payload).unwrap();
         self.send_params.next += payload.len() as u32;
         self.send_params.window -= payload.len() as u16;
     }
 
-    //TODO: Rename
-    fn send_tcp_packet_common(&mut self, flag: u8, status: TcpStatus) {
-        self.send_tcp_packet(
-            flag,
-            self.send_params.next,
-            self.recv_params.next,
-            self.recv_params.window,
-            &[],
-        )
-        .unwrap();
+    pub fn send_tcp_packet_ack(&mut self, status: TcpStatus) {
+        self.send_tcp_packet(tcpflags::ACK, &[]).unwrap();
+        self.set_status(status);
+    }
+
+    fn set_status(&mut self, status: TcpStatus) {
         self.status = status;
         dbg!(&self.status);
     }
