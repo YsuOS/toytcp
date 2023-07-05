@@ -221,15 +221,6 @@ impl Socket {
             }
             TcpStatus::CloseWait => {
                 sock.status = TcpStatus::LastAck;
-                drop(table);
-
-                // Wait for completion of handling last ack
-                // FIXME: implement sync withn receive thread instead of wait some time.
-                std::thread::sleep(Duration::from_millis(100));
-
-                let mut table = self.socks.write().unwrap();
-                table.remove(&sock_id);
-                dbg!("connection closed & removed", sock_id);
             }
             _ => return Ok(()),
         }
@@ -283,9 +274,8 @@ impl Socket {
                 TcpStatus::SynSent => self.synsent_handler(tcp_packet, sock)?,
                 TcpStatus::SynRcvd => self.synrcvd_handler(tcp_packet, sock_id, table)?,
                 TcpStatus::Established => self.established_handler(tcp_packet, sock)?,
-                TcpStatus::CloseWait | TcpStatus::LastAck => {
-                    self.close_handler(tcp_packet, sock)?
-                }
+                TcpStatus::CloseWait => self.closewait_handler(tcp_packet, sock)?,
+                TcpStatus::LastAck => self.lastack_handler(tcp_packet, sock_id, table)?,
                 TcpStatus::FinWait1 | TcpStatus::FinWait2 => {
                     self.finwait_handler(tcp_packet, sock)?
                 }
@@ -377,8 +367,22 @@ impl Socket {
         Ok(())
     }
 
-    fn close_handler(&self, packet: TcpPacket, sock: &mut Sock) -> Result<()> {
+    fn closewait_handler(&self, packet: TcpPacket, sock: &mut Sock) -> Result<()> {
         sock.send_params.una = packet.get_ack();
+        Ok(())
+    }
+
+    fn lastack_handler(
+        &self,
+        packet: TcpPacket,
+        sock_id: SockId,
+        mut table: RwLockWriteGuard<HashMap<SockId, Sock>>,
+    ) -> Result<()> {
+        let mut sock = table.get_mut(&sock_id).unwrap();
+        sock.send_params.una = packet.get_ack();
+
+        table.remove(&sock_id);
+        dbg!("connection closed & removed", sock_id);
         Ok(())
     }
 
