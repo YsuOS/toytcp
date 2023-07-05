@@ -127,7 +127,6 @@ impl Socket {
     }
 
     pub fn accept(&self) -> Result<SockId> {
-        self.wait_state(SocketState::Connected);
         loop {
             match self.pop_front_backlog() {
                 Some(sock_id) => {
@@ -214,6 +213,7 @@ impl Socket {
             TcpStatus::Established => {
                 sock.status = TcpStatus::FinWait1;
                 drop(table);
+                // FIXME: is it appropriate?
                 self.wait_state(SocketState::Free);
                 let mut table = self.socks.write().unwrap();
                 table.remove(&sock_id);
@@ -222,6 +222,7 @@ impl Socket {
             TcpStatus::CloseWait => {
                 sock.status = TcpStatus::LastAck;
                 drop(table);
+                // FIXME: is it appropriate?
                 self.wait_state(SocketState::Free);
                 let mut table = self.socks.write().unwrap();
                 table.remove(&sock_id);
