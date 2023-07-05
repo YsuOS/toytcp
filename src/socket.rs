@@ -43,6 +43,7 @@ enum SocketState {
     Unconnected,
     Connecting,
     Connected,
+    Disconnecting,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -213,8 +214,7 @@ impl Socket {
             TcpStatus::Established => {
                 sock.status = TcpStatus::FinWait1;
                 drop(table);
-                // FIXME: is it appropriate?
-                self.wait_state(SocketState::Free);
+                self.wait_state(SocketState::Disconnecting);
                 let mut table = self.socks.write().unwrap();
                 table.remove(&sock_id);
                 dbg!("connection closed & removed", sock_id);
@@ -222,8 +222,11 @@ impl Socket {
             TcpStatus::CloseWait => {
                 sock.status = TcpStatus::LastAck;
                 drop(table);
-                // FIXME: is it appropriate?
-                self.wait_state(SocketState::Free);
+
+                // Wait for completion of handling last ack
+                // FIXME: implement sync withn receive thread instead of wait some time.
+                std::thread::sleep(Duration::from_millis(100));
+
                 let mut table = self.socks.write().unwrap();
                 table.remove(&sock_id);
                 dbg!("connection closed & removed", sock_id);
@@ -271,6 +274,7 @@ impl Socket {
             };
 
             let sock_id = sock.sock_id;
+            dbg!(&sock.status);
             match sock.status {
                 TcpStatus::Listen => {
                     self.set_state(SocketState::Connecting);
@@ -399,7 +403,7 @@ impl Socket {
             sock.send_tcp_packet_ack(TcpStatus::TimeWait);
             // TODO: not implemented TimeWait state. The socket closes immediately after sending
             // ack
-            self.set_state(SocketState::Free);
+            self.set_state(SocketState::Disconnecting);
         }
 
         Ok(())
@@ -491,7 +495,7 @@ impl Socket {
                                 || sock.status == TcpStatus::FinWait1
                                 || sock.status == TcpStatus::FinWait2)
                         {
-                            self.set_state(SocketState::Free);
+                            //self.set_state(SocketState::Free);
                             dbg!("connection closed");
                         }
                     }
