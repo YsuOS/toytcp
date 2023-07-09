@@ -33,13 +33,13 @@ const PORT_RANGE: Range<u16> = 40000..60000;
 #[derive(Debug)]
 pub struct Socket {
     socks: RwLock<HashMap<SockId, Sock>>,
-    socket_state: (Mutex<SocketState>, Condvar),
+    socket_state: (Mutex<Option<SocketState>>, Condvar),
     backlog: Mutex<VecDeque<SockId>>,
 }
 
-#[derive(Debug, PartialEq)]
+// TODO: review when the socket state is changed and use it
+#[derive(Debug, PartialEq, Clone, Copy)]
 enum SocketState {
-    Free,
     Unconnected,
     Connecting,
     Connected,
@@ -74,7 +74,7 @@ impl Socket {
     pub fn new() -> Arc<Self> {
         let socket = Arc::new(Self {
             socks: RwLock::new(HashMap::new()),
-            socket_state: (Mutex::new(SocketState::Free), Condvar::new()),
+            socket_state: (Mutex::new(None), Condvar::new()),
             backlog: Mutex::new(VecDeque::new()),
         });
         let cloned_socket = socket.clone();
@@ -464,7 +464,6 @@ impl Socket {
                         if entry.packet.get_flag() & tcpflags::FIN > 0
                             && sock.status == TcpStatus::LastAck
                         {
-                            self.set_state(SocketState::Free);
                             dbg!("connection closed");
                         }
                         continue;
@@ -499,7 +498,6 @@ impl Socket {
                                 || sock.status == TcpStatus::FinWait1
                                 || sock.status == TcpStatus::FinWait2)
                         {
-                            //self.set_state(SocketState::Free);
                             dbg!("connection closed");
                         }
                     }
@@ -513,7 +511,7 @@ impl Socket {
     fn wait_state(&self, wait_state: SocketState) {
         let (state, cvar) = &self.socket_state;
         let mut state = state.lock().unwrap();
-        while *state != wait_state {
+        while *state != Some(wait_state) {
             state = cvar.wait(state).unwrap();
         }
     }
@@ -521,7 +519,7 @@ impl Socket {
     fn set_state(&self, set_state: SocketState) {
         let (state, cvar) = &self.socket_state;
         let mut state = state.lock().unwrap();
-        *state = set_state;
+        *state = Some(set_state);
         cvar.notify_all();
     }
 
